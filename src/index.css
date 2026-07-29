@@ -1,0 +1,312 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ════════════════════════════════════════════════════════════════════
+   MiraFlow AI — design tokens (design.md §2)
+   Dark-first. `.dark` on <html> = thème sombre (défaut).
+   ════════════════════════════════════════════════════════════════════ */
+@layer base {
+  :root {
+    /* shadcn bridge (light) */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.9% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* ── MiraFlow « Solar Glass » — thème clair (défaut) ── */
+    --bg-void: #F2F3F7;
+    --bg-base: #F2F3F7;
+    --surface-1: #FFFFFF;
+    --surface-2: #F6F7FB;
+    --surface-3: #EDEFF6;
+    --line: rgba(13,20,38,.09);
+    --line-strong: rgba(13,20,38,.18);
+    --text-hi: #0E1322;
+    --text-mid: #4A5468;
+    --text-low: #8B93A7;
+    --iris: #FF5A4E;
+    --pulse: #E8871A;
+    --mint: #0BA98D;
+    --amber: #E8930C;
+    --rose: #E03A50;
+    --violet: #7A5CFF;
+    --bubble-in: #FFFFFF;
+    --glass-bg: rgba(255,255,255,.65);
+    --aurora-opacity: .45;
+
+    /* canaux RGB pour les utilitaires Tailwind avec opacité (bg-iris/10…) */
+    --bg-void-rgb: 242 243 247;
+    --bg-base-rgb: 242 243 247;
+    --surface-1-rgb: 255 255 255;
+    --surface-2-rgb: 246 247 251;
+    --surface-3-rgb: 237 239 246;
+    --line-rgb: 13 20 38;
+    --line-alpha: .09;
+    --line-alpha-strong: .18;
+    --text-hi-rgb: 14 19 34;
+    --text-mid-rgb: 74 84 104;
+    --text-low-rgb: 139 147 167;
+    --iris-rgb: 255 90 78;
+    --pulse-rgb: 232 135 26;
+    --mint-rgb: 11 169 141;
+    --amber-rgb: 232 147 12;
+    --rose-rgb: 224 58 80;
+    --violet-rgb: 122 92 255;
+    --bubble-in-rgb: 255 255 255;
+  }
+
+  .dark {
+    /* shadcn bridge (dark) */
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 5.9% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* ── MiraFlow « Solar Glass » — thème sombre (graphite chaud) ── */
+    --bg-void: #0B0B0E;
+    --bg-base: #101014;
+    --surface-1: #17171D;
+    --surface-2: #1E1E26;
+    --surface-3: #26262F;
+    --line: rgba(255,190,150,.10);
+    --line-strong: rgba(255,190,150,.22);
+    --text-hi: #F6F2EE;
+    --text-mid: #B4AEB6;
+    --text-low: #6E6873;
+    --iris: #FF6B5E;
+    --pulse: #FFB04A;
+    --mint: #2FD4AE;
+    --amber: #FFB84D;
+    --rose: #FF6B7A;
+    --violet: #8F7AFF;
+    --bubble-in: #1D1D26;
+    --glass-bg: rgba(255,255,255,.04);
+    --aurora-opacity: 1;
+
+    /* canaux RGB pour les utilitaires Tailwind avec opacité (bg-iris/10…) */
+    --bg-void-rgb: 11 11 14;
+    --bg-base-rgb: 16 16 20;
+    --surface-1-rgb: 23 23 29;
+    --surface-2-rgb: 30 30 38;
+    --surface-3-rgb: 38 38 47;
+    --line-rgb: 255 190 150;
+    --line-alpha: .10;
+    --line-alpha-strong: .22;
+    --text-hi-rgb: 246 242 238;
+    --text-mid-rgb: 180 174 182;
+    --text-low-rgb: 110 104 115;
+    --iris-rgb: 255 107 94;
+    --pulse-rgb: 255 176 74;
+    --mint-rgb: 47 212 174;
+    --amber-rgb: 255 184 77;
+    --rose-rgb: 255 107 122;
+    --violet-rgb: 143 122 255;
+    --bubble-in-rgb: 29 29 38;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  html.lenis, html.lenis body {
+    height: auto;
+  }
+  .lenis.lenis-smooth {
+    scroll-behavior: auto !important;
+  }
+
+  body {
+    @apply bg-base text-hi font-sans antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  html[lang="ar"] body {
+    font-family: "IBM Plex Sans Arabic", "Inter", system-ui, sans-serif;
+  }
+
+  ::selection {
+    background: rgba(255, 90, 78, .30);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--iris);
+    outline-offset: 2px;
+  }
+
+  /* Scrollbars app */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--surface-3);
+    border-radius: 8px;
+    border: 2px solid var(--bg-base);
+  }
+}
+
+@layer components {
+  /* ── Glass panel (design.md §1.3) ── */
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
+    border: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 var(--glass-hi, rgba(255,255,255,.25));
+  }
+  .dark .glass {
+    --glass-hi: rgba(255,255,255,.06);
+  }
+
+  /* ── Grain overlay (design.md §1.4) ── */
+  .grain::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    pointer-events: none;
+    background-image: url("/noise.png");
+    background-repeat: repeat;
+    background-size: 256px 256px;
+    opacity: .04;
+    mix-blend-mode: overlay;
+  }
+
+  /* ── Signature gradient « Solar Glass » ── */
+  .gradient-signature {
+    background-image: linear-gradient(135deg, #FF5A4E 0%, #FF9F2E 52%, #0DBA9B 100%);
+  }
+  .text-gradient {
+    background-image: linear-gradient(135deg, #FF5A4E 0%, #FF9F2E 52%, #0DBA9B 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ── Bubble sortant ── */
+  .bubble-out {
+    background: linear-gradient(135deg, #FF6B5E, #FF9F2E);
+  }
+
+  /* ── Mono micro label (design.md §3) ── */
+  .label-micro {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    line-height: 16px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  /* ── Aurora background blobs (design.md §2) ── */
+  .aurora {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    opacity: var(--aurora-opacity);
+  }
+  .aurora > span {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(120px);
+    will-change: transform;
+    animation: aurora-drift 40s ease-in-out infinite alternate;
+  }
+  .aurora > span:nth-child(1) {
+    width: 44vw; height: 44vw; left: -10vw; top: -12vw;
+    background: rgba(255, 90, 78, .16);
+  }
+  .aurora > span:nth-child(2) {
+    width: 36vw; height: 36vw; right: -8vw; top: 10vh;
+    background: rgba(255, 159, 46, .12);
+    animation-delay: -14s;
+  }
+  .aurora > span:nth-child(3) {
+    width: 30vw; height: 30vw; left: 30vw; bottom: -14vw;
+    background: rgba(13, 186, 155, .09);
+    animation-delay: -27s;
+  }
+
+  /* ── Bordure dégradée (technique double-fond, design.md §1.3) ── */
+  .border-gradient {
+    border: 1px solid transparent;
+    background:
+      linear-gradient(var(--surface-1), var(--surface-1)) padding-box,
+      linear-gradient(135deg, rgba(255,90,78,.6), rgba(255,159,46,.4), rgba(13,186,155,.5)) border-box;
+  }
+
+  /* ── Signal line animée (design.md §1.2) ── */
+  .signal-line {
+    stroke-dasharray: 6 6;
+    animation: dash-flow 1.2s linear infinite;
+  }
+
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@keyframes dash-flow {
+  to { stroke-dashoffset: -24; }
+}
+
+@keyframes aurora-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(4vw, 3vh, 0) scale(1.08); }
+  100% { transform: translate3d(-3vw, -2vh, 0) scale(.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora > span,
+  .signal-line {
+    animation: none !important;
+  }
+}
