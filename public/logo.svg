@@ -1,0 +1,33 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="core" cx="38%" cy="34%" r="78%">
+      <stop offset="0%" stop-color="#FFC9C2"/>
+      <stop offset="34%" stop-color="#FF5A4E"/>
+      <stop offset="72%" stop-color="#FF9F2E"/>
+      <stop offset="100%" stop-color="#8A3B12"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5A4E"/>
+      <stop offset="55%" stop-color="#FF9F2E"/>
+      <stop offset="100%" stop-color="#0DBA9B"/>
+    </linearGradient>
+    <filter id="soft" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- halo -->
+  <circle cx="256" cy="256" r="150" fill="url(#core)" opacity="0.45" filter="url(#soft)"/>
+
+  <!-- sphere Core -->
+  <circle cx="256" cy="256" r="132" fill="url(#core)"/>
+  <ellipse cx="212" cy="206" rx="52" ry="34" fill="#FFFFFF" opacity="0.28"/>
+
+  <!-- anneau orbital incline -->
+  <g transform="rotate(-18 256 256)">
+    <ellipse cx="256" cy="256" rx="208" ry="82" fill="none" stroke="url(#ring)" stroke-width="5" opacity="0.9"/>
+    <circle cx="464" cy="256" r="11" fill="#FF9F2E"/>
+    <circle cx="120" cy="200" r="8" fill="#FF5A4E"/>
+    <circle cx="300" cy="335" r="6" fill="#0DBA9B"/>
+  </g>
+</svg>

@@ -1,0 +1,60 @@
+<svg width="480" height="360" viewBox="0 0 480 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="eo-stroke" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5A4E"/>
+      <stop offset="100%" stop-color="#FF9F2E"/>
+    </linearGradient>
+    <radialGradient id="eo-core" cx="40%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#FFC9C2"/>
+      <stop offset="45%" stop-color="#FF5A4E"/>
+      <stop offset="100%" stop-color="#FF9F2E"/>
+    </radialGradient>
+  </defs>
+
+  <!-- etoiles -->
+  <g fill="#F2F5FF" opacity="0.7">
+    <circle cx="52" cy="64" r="1.8"/>
+    <circle cx="96" cy="300" r="1.4"/>
+    <circle cx="430" cy="80" r="1.8"/>
+    <circle cx="452" cy="286" r="1.4"/>
+    <circle cx="392" cy="40" r="1.2"/>
+    <circle cx="36" cy="196" r="1.2"/>
+    <circle cx="216" cy="34" r="1.5"/>
+    <circle cx="300" cy="332" r="1.2"/>
+  </g>
+  <g stroke="#F2F5FF" stroke-width="1.2" opacity="0.55" stroke-linecap="round">
+    <path d="M150 60 v10 M145 65 h10"/>
+    <path d="M412 200 v10 M407 205 h10"/>
+    <path d="M70 130 v8 M66 134 h8"/>
+  </g>
+
+  <!-- orbites -->
+  <ellipse cx="240" cy="188" rx="168" ry="72" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-dasharray="4 7" opacity="0.55" transform="rotate(-12 240 188)"/>
+  <ellipse cx="240" cy="188" rx="116" ry="48" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-dasharray="3 6" opacity="0.35" transform="rotate(-12 240 188)"/>
+
+  <!-- planete core -->
+  <circle cx="240" cy="188" r="46" fill="url(#eo-core)" opacity="0.9"/>
+  <circle cx="240" cy="188" r="46" stroke="#F2F5FF" stroke-opacity="0.35" stroke-width="1.5"/>
+  <ellipse cx="240" cy="188" rx="66" ry="20" stroke="url(#eo-stroke)" stroke-width="1.5" transform="rotate(-12 240 188)" opacity="0.8"/>
+
+  <!-- message en orbite 1 (bulle) -->
+  <g transform="translate(368 96)">
+    <rect x="-34" y="-20" width="68" height="40" rx="12" stroke="url(#eo-stroke)" stroke-width="1.5" fill="none"/>
+    <path d="M-6 20 l-8 12 l18 -10" stroke="url(#eo-stroke)" stroke-width="1.5" fill="none" stroke-linejoin="round"/>
+    <line x1="-20" y1="-6" x2="20" y2="-6" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="-20" y1="4" x2="8" y2="4" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  </g>
+
+  <!-- message en orbite 2 (bulle) -->
+  <g transform="translate(112 268)">
+    <rect x="-30" y="-18" width="60" height="36" rx="11" stroke="url(#eo-stroke)" stroke-width="1.5" fill="none" opacity="0.85"/>
+    <path d="M8 18 l6 10 l-16 -8" stroke="url(#eo-stroke)" stroke-width="1.5" fill="none" stroke-linejoin="round" opacity="0.85"/>
+    <line x1="-17" y1="-5" x2="17" y2="-5" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-linecap="round" opacity="0.85"/>
+    <line x1="-17" y1="5" x2="5" y2="5" stroke="url(#eo-stroke)" stroke-width="1.5" stroke-linecap="round" opacity="0.5"/>
+  </g>
+
+  <!-- points de connexion -->
+  <circle cx="240" cy="188" r="3.5" fill="#FF9F2E"/>
+  <circle cx="368" cy="96" r="3" fill="#FF5A4E"/>
+  <circle cx="112" cy="268" r="3" fill="#FF5A4E"/>
+</svg>

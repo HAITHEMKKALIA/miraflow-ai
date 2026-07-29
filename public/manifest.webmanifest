@@ -1,0 +1,28 @@
+{
+  "name": "MiraFlow AI",
+  "short_name": "MiraFlow",
+  "description": "Plateforme de messagerie conversationnelle : inbox d'équipe, campagnes, workflows et agents IA connectés par QR.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F2F3F7",
+  "theme_color": "#F2F3F7",
+  "lang": "fr",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
