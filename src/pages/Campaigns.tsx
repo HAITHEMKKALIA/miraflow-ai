@@ -168,6 +168,48 @@ export default function Campaigns() {
     toast.success("Rapport exporté", { description: "CSV téléchargé." });
   }, []);
 
+  const onRelanceHuman = useCallback((c: StudioCampaign) => {
+    const copy: StudioCampaign = {
+      ...c,
+      id: `cp_local_human_${Date.now().toString(36)}`,
+      name: `${c.name} (Relance Humaine)`,
+      status: "draft",
+      audience: "Audience à définir",
+      total: 0,
+      sent: 0,
+      delivered: 0,
+      replies: 0,
+      failed: 0,
+      unsubscribed: 0,
+      scheduledAt: undefined,
+      relanceType: "human",
+      local: true,
+    };
+    setLocals((prev) => [...prev, copy]);
+    toast.info("Relance humaine créée", { description: "Brouillon prêt. Définissez l'audience pour lancer." });
+  }, []);
+
+  const onRelanceAi = useCallback((c: StudioCampaign) => {
+    const copy: StudioCampaign = {
+      ...c,
+      id: `cp_local_ai_${Date.now().toString(36)}`,
+      name: `${c.name} (Relance IA)`,
+      status: "running",
+      sent: 0,
+      delivered: 0,
+      replies: 0,
+      failed: 0,
+      unsubscribed: 0,
+      scheduledAt: undefined,
+      relanceType: "ai",
+      local: true,
+    };
+    setLocals((prev) => [...prev, copy]);
+    toast.success("Relance IA activée", { description: "L'agent IA traite les réponses en temps réel." });
+    setConfetti(true);
+    setTimeout(() => setConfetti(false), 2000);
+  }, []);
+
   const onLaunch = useCallback((state: WizardState, eligible: Contact[]) => {
     const scheduled = state.sendMode === "later" && state.date;
     const scheduledAt = scheduled ? new Date(`${state.date}T${state.time || "09:00"}:00`).getTime() : undefined;
@@ -256,6 +298,8 @@ export default function Campaigns() {
               onEdit={onEdit}
               onExport={onExport}
               onValidate={onValidate}
+              onRelanceHuman={onRelanceHuman}
+              onRelanceAi={onRelanceAi}
             />
           )}
           {view.name === "wizard" && (

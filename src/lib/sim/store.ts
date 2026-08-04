@@ -190,6 +190,18 @@ export interface ActivityEvent {
   text: string;
 }
 
+export interface JournalEntry {
+  id: string;
+  at: number;
+  agentId: string;
+  agentName: string;
+  conversation: string;
+  action: "Suggestion" | "Réponse auto" | "Escalade";
+  confidence: number;
+  decision: "Approuvée" | "Modifiée" | "Rejetée" | "En attente" | "—";
+  latencyS: number;
+}
+
 export interface Org {
   name: string;
   city: string;
@@ -552,6 +564,8 @@ export interface SimState {
   tenants: Tenant[];
   notifications: AppNotification[];
   activity: ActivityEvent[];
+  /** Journal d'activité IA global (partagé entre les modules) */
+  journal: JournalEntry[];
   /** KPI « messages aujourd'hui » (tick à chaque message entrant/sortant) */
   messagesToday: number;
   /** Série temps réel : messages par heure (24 points) */
@@ -588,6 +602,9 @@ export interface SimState {
     userName: string;
     sessionName?: string;
   }) => void;
+  addSuggestion: (s: Omit<AiSuggestion, "id" | "at" | "status">) => void;
+  addActivity: (event: Omit<ActivityEvent, "id" | "at">) => void;
+  pushJournal: (entry: Omit<JournalEntry, "id" | "at">) => void;
   resetDemo: () => void;
 }
 
@@ -617,6 +634,7 @@ export const useSim = create<SimState>()(
       tenants: TENANTS,
       notifications: SEED_NOTIFICATIONS,
       activity: SEED_ACTIVITY,
+      journal: [],
       messagesToday: 2481,
       chartSeries: buildChartSeries(),
       drafts: {},
@@ -703,6 +721,24 @@ export const useSim = create<SimState>()(
         })),
       markAllNotificationsRead: () =>
         set((s) => ({ notifications: s.notifications.map((n) => ({ ...n, read: true })) })),
+
+      addSuggestion: (sug) =>
+        set((s) => ({
+          suggestions: [
+            { ...sug, id: uid("sug"), at: Date.now(), status: "pending" },
+            ...s.suggestions,
+          ].slice(0, 50),
+        })),
+
+      addActivity: (event) =>
+        set((s) => ({
+          activity: [{ ...event, id: uid("ac"), at: Date.now() }, ...s.activity].slice(0, 40),
+        })),
+
+      pushJournal: (entry) =>
+        set((s) => ({
+          journal: [{ ...entry, id: uid("j"), at: Date.now() }, ...s.journal].slice(0, 100),
+        })),
 
       applyOnboarding: ({ orgName, plan, userName, sessionName }) =>
         set(() => {

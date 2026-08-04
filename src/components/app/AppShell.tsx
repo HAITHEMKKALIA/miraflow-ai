@@ -35,6 +35,7 @@ import { LANGS, useI18n } from "@/lib/i18n";
 import { isOwnerAuthed, ownerLogout } from "@/lib/owner";
 import StatusDot from "@/components/ui-shared/StatusDot";
 import CommandPalette from "./CommandPalette";
+import AIOrchestrator from "@/sections/agents/AIOrchestrator";
 import { cn } from "@/lib/utils";
 
 /* ── Navigation ─────────────────────────────────────────────────────────── */
@@ -294,6 +295,7 @@ export default function AppShell() {
 
   return (
     <div className="flex min-h-[100dvh] bg-base">
+      <AIOrchestrator />
       <Toaster
         position="top-right"
         gap={8}

@@ -273,15 +273,21 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /* Journal IA */
-  const [journal, setJournal] = useState<JournalEntry[]>(() =>
+  const globalJournal = useSim((s) => s.journal);
+  const pushGlobalJournal = useSim((s) => s.pushJournal);
+
+  const [localJournal, setLocalJournal] = useState<JournalEntry[]>(() =>
     seedJournal(
       agents.map((a) => ({ id: a.id, name: a.name })),
       contacts.slice(0, 8).map((c) => c.name),
     ),
   );
+
+  const journal = useMemo(() => [...globalJournal, ...localJournal], [globalJournal, localJournal]);
+
   const pushJournal = useCallback((e: Omit<JournalEntry, "id" | "at">) => {
-    setJournal((j) => [{ ...e, id: uid("j"), at: Date.now() }, ...j].slice(0, 30));
-  }, []);
+    pushGlobalJournal(e);
+  }, [pushGlobalJournal]);
 
   /* Seed : 3 suggestions en attente si la file est vide (design §S1/S6) */
   useEffect(() => {

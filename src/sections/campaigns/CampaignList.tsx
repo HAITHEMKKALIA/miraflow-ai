@@ -10,6 +10,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Check, ChevronRight, Clock, Copy, Download, FilePenLine, Megaphone,
   MoreHorizontal, OctagonX, Pause, Play, Plus, ShieldCheck, TrendingUp,
+  User, Sparkles,
 } from "lucide-react";
 import { EmptyState, StatusDot, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
@@ -87,13 +88,15 @@ export function StatusChip({ status }: { status: StudioStatus }) {
 
 /* ── Menu ⋯ ────────────────────────────────────────────────────────────── */
 function RowMenu({
-  onDuplicate, onEdit, onTrack, onExport, onStop, stoppable,
+  onDuplicate, onEdit, onTrack, onExport, onStop, onRelanceHuman, onRelanceAi, stoppable,
 }: {
   onDuplicate: () => void;
   onEdit: () => void;
   onTrack: () => void;
   onExport: () => void;
   onStop: () => void;
+  onRelanceHuman: () => void;
+  onRelanceAi: () => void;
   stoppable: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -135,6 +138,16 @@ function RowMenu({
             <button type="button" className={item} onClick={() => { setOpen(false); onTrack(); }}>
               <TrendingUp className="size-3.5" /> Suivi
             </button>
+            
+            <div className="my-1 border-t border-line" />
+            <button type="button" className={item} onClick={() => { setOpen(false); onRelanceHuman(); }}>
+              <User className="size-3.5 text-mid" /> Relancer avec humain
+            </button>
+            <button type="button" className={item} onClick={() => { setOpen(false); onRelanceAi(); }}>
+              <Sparkles className="size-3.5 text-iris" /> Relancer avec agent IA
+            </button>
+            <div className="my-1 border-t border-line" />
+
             <button type="button" className={item} onClick={() => { setOpen(false); onExport(); }}>
               <Download className="size-3.5" /> Exporter le rapport
             </button>
@@ -160,6 +173,7 @@ function RowMenu({
 /* ── Ligne campagne ────────────────────────────────────────────────────── */
 function CampaignRow({
   c, index, onPauseToggle, onTrack, onStop, onDuplicate, onEdit, onExport, onValidate,
+  onRelanceHuman, onRelanceAi,
 }: {
   c: StudioCampaign;
   index: number;
@@ -170,6 +184,8 @@ function CampaignRow({
   onEdit: (c: StudioCampaign) => void;
   onExport: (c: StudioCampaign) => void;
   onValidate: (c: StudioCampaign) => void;
+  onRelanceHuman: (c: StudioCampaign) => void;
+  onRelanceAi: (c: StudioCampaign) => void;
 }) {
   const goal = GOAL_META[c.goal];
   const progress = c.total > 0 ? c.sent / c.total : 0;
@@ -290,6 +306,8 @@ function CampaignRow({
               onEdit={() => onEdit(c)}
               onTrack={() => onTrack(c)}
               onExport={() => onExport(c)}
+              onRelanceHuman={() => onRelanceHuman(c)}
+              onRelanceAi={() => onRelanceAi(c)}
             />
           </div>
         </div>
@@ -335,6 +353,8 @@ export default function CampaignList({
   onEdit,
   onExport,
   onValidate,
+  onRelanceHuman,
+  onRelanceAi,
 }: {
   campaigns: StudioCampaign[];
   hasDraft: boolean;
@@ -348,6 +368,8 @@ export default function CampaignList({
   onEdit: (c: StudioCampaign) => void;
   onExport: (c: StudioCampaign) => void;
   onValidate: (c: StudioCampaign) => void;
+  onRelanceHuman: (c: StudioCampaign) => void;
+  onRelanceAi: (c: StudioCampaign) => void;
 }) {
   const [tab, setTab] = useState<TabId>("all");
 
@@ -477,6 +499,8 @@ export default function CampaignList({
               onEdit={onEdit}
               onExport={onExport}
               onValidate={onValidate}
+              onRelanceHuman={onRelanceHuman}
+              onRelanceAi={onRelanceAi}
             />
           ))}
         </motion.ul>

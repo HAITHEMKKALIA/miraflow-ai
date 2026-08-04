@@ -31,6 +31,8 @@ export interface StudioCampaign extends Omit<Campaign, "status"> {
   followUpMsg?: string;
   /** Arrêt/exclusion d'un destinataire dès qu'il répond. */
   stopOnReply?: boolean;
+  /** Type de relance : manuel (humain) ou automatisé (IA). */
+  relanceType?: "human" | "ai";
 }
 
 /** Format d'envoi du carrousel intelligent (étape Contenu). */
