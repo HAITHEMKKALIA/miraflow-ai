@@ -1,4 +1,3 @@
-import React from "react";
 import { useSettings, type TabId } from "./context";
 
 export default function SettingsNav() {

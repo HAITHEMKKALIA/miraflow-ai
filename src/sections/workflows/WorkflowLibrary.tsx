@@ -1,6 +1,29 @@
-import React from "react";
+export interface LibraryWorkflow {
+  id: string;
+  name: string;
+  status: "active" | "paused" | "draft";
+  runs: number;
+  successRate: number;
+  version: number;
+  lastRunAt?: number;
+  graphId: string;
+}
 
-export default function WorkflowLibrary({ workflows, onOpen, onCreate }: any) {
+export default function WorkflowLibrary({
+  workflows,
+  onOpen,
+  onCreate,
+}: {
+  workflows: LibraryWorkflow[];
+  onOpen: (id: string) => void;
+  onJournal: (id: string) => void;
+  onToggle: (id: string) => void;
+  onDuplicate: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, name: string) => void;
+  onExport: (id: string) => void;
+  onCreate: (name: string, graphId: string) => void;
+}) {
   return (
     <div className="p-8">
       <div className="flex justify-between items-center mb-8">

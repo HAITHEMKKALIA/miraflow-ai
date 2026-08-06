@@ -141,8 +141,8 @@ export default function SuperAdmin() {
       if (type === "messages") e.msgQuota = Math.round(e.msgQuota * 1.2);
       else if (type === "sessions") e.sessionsQuota += 1;
       else if (type === "contacts")
-        e.contactsQuota = Math.round((e.contactsQuota ?? DEFAULT_QUOTAS[base.plan].contacts) * 1.2);
-      else e.agentsQuota = (e.agentsQuota ?? DEFAULT_QUOTAS[base.plan].agents) + 1;
+        e.contactsQuota = Math.round((e.contactsQuota ?? DEFAULT_QUOTAS[base.plan].contactsQuota) * 1.2);
+      else e.agentsQuota = (e.agentsQuota ?? DEFAULT_QUOTAS[base.plan].agentsQuota) + 1;
       return { ...o, [id]: { ...o[id], extra: e } };
     });
   };

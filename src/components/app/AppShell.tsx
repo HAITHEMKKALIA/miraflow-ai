@@ -329,7 +329,7 @@ export default function AppShell() {
         animate={{ width: sidebarW }}
         transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
         className={cn(
-          "fixed inset-y-0 start-0 z-50 flex h-[100dvh] shrink-0 flex-col border-e border-line bg-surface-1 transition-transform duration-300 ease-[cubic-bezier(.4,0,.2,1)] lg:sticky lg:top-0 lg:z-40 lg:translate-x-0",
+          "fixed inset-y-0 start-0 z-50 flex h-[100dvh] shrink-0 flex-col border-e border-line bg-surface-1 transition-transform duration-300 ease-in-out lg:sticky lg:top-0 lg:z-40 lg:translate-x-0",
           // Déterministe (évite les conflits d'ordre des variants Tailwind) :
           // drawer caché uniquement sur mobile quand il est fermé
           mobileOpen || isDesktop ? "translate-x-0" : "ltr:-translate-x-full rtl:translate-x-full",

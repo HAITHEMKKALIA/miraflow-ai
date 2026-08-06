@@ -5,6 +5,7 @@
  * Barre sticky basse « Modifications non enregistrées » (slide-up spring,
  * devient verte « Enregistré ✓ » 1,2 s à la sauvegarde).
  */
+import type { ComponentType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -19,7 +20,7 @@ import SecurityTab from "@/sections/settings/SecurityTab";
 import NotificationsTab from "@/sections/settings/NotificationsTab";
 import AppearanceTab from "@/sections/settings/AppearanceTab";
 
-const TAB_CONTENT: Record<TabId, React.ComponentType> = {
+const TAB_CONTENT: Record<TabId, ComponentType<any>> = {
   general: GeneralTab,
   equipe: TeamTab,
   sessions: SessionsTab,
