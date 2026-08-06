@@ -29,7 +29,9 @@ export default function Home() {
     }
   });
 
-  useEffect(() => initLenis(), []);
+  useEffect(() => {
+    initLenis();
+  }, []);
 
   return (
     <div className="grain relative bg-void text-hi">

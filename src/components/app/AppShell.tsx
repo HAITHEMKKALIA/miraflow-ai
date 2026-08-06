@@ -19,7 +19,7 @@
  *
  * Dépendances : SimEngine (@/lib/sim/store), i18n (@/lib/i18n).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -225,7 +225,8 @@ export default function AppShell() {
 
   // Ferme le drawer mobile à chaque navigation + verrouille le scroll
   useEffect(() => {
-    setMobileOpen(false);
+    const timeout = setTimeout(() => setMobileOpen(false), 0);
+    return () => clearTimeout(timeout);
   }, [location.pathname]);
   useEffect(() => {
     if (!mobileOpen) return;
@@ -274,9 +275,11 @@ export default function AppShell() {
   const mainSession = sessions[0];
   const me = useSim((s) => s.team[0]);
   const trialEndsAt = useSim((s) => s.trialEndsAt);
-  const trialDaysLeft = trialEndsAt
-    ? Math.max(0, Math.ceil((trialEndsAt - Date.now()) / 86_400_000))
-    : null;
+  const [now] = useState(() => Date.now());
+  const trialDaysLeft = useMemo(() => {
+    if (!trialEndsAt) return null;
+    return Math.max(0, Math.ceil((trialEndsAt - now) / 86_400_000));
+  }, [trialEndsAt, now]);
   const inboxBadge = kpis.unreadInbox;
 
   /** Déconnexion réelle : ferme la session owner/tenant puis retour accueil. */

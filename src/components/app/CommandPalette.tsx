@@ -79,7 +79,9 @@ export default function CommandPalette({
     return out.slice(0, 12);
   }, [query, conversations, contacts, campaigns]);
 
-  useEffect(() => setCursor(0), [items.length]);
+  useEffect(() => {
+    setCursor(0);
+  }, [items.length]);
 
   const go = (item: Item) => {
     onClose();

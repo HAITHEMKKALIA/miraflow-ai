@@ -9,7 +9,7 @@ import { ArrowRight, Bot, Database, MessageSquareWarning, Sparkles } from "lucid
 import { useAgents, usePendingSuggestions } from "@/lib/sim/store";
 import { ConfirmDialog, TickNumber } from "@/components/ui-shared";
 import { Toggle } from "./controls";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 import { EASE, fmtNum } from "./motion";
 
 const item = {

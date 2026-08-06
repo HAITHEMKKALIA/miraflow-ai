@@ -12,7 +12,7 @@ import type { AiAgent } from "@/lib/sim/store";
 import { Sparkline, StatusDot, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
 import { AGENT_META, COLOR_STYLES, EXTRA_AGENTS } from "./data";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
 
 /* ── Core décoratif + signal lines (desktop uniquement) ────────────────── */

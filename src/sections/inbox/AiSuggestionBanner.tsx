@@ -11,10 +11,10 @@ import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, FileText, Loader2, PencilLine, Send, X } from "lucide-react";
 import type { AiSuggestion } from "@/lib/sim/store";
-import { useAgents, useSim } from "@/lib/sim/store";
+import { useAgents } from "@/lib/sim/store";
 import { ConfidenceRing } from "@/sections/agents/controls";
-import { ago } from "./thread";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 /* ── Sources déterministes (démo) : 1 à 3 docs selon la suggestion ─────── */
 const SOURCE_POOL = [
@@ -43,7 +43,8 @@ function relTime(at: number): string {
   if (m < 60) return `il y a ${m} min`;
   const h = Math.round(m / 60);
   if (h < 24) return `il y a ${h} h`;
-  return ago(at);
+  const d = Math.round(h / 24);
+  return `il y a ${d} j`;
 }
 
 export default function AiSuggestionBanner({
@@ -58,7 +59,6 @@ export default function AiSuggestionBanner({
   onDismiss: (id: string) => void;
 }) {
   const agents = useAgents();
-  const requestSuggestion = useSim((s) => s.requestSuggestion);
   const agent = agents.find((a) => a.id === suggestion.agentId);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
   const [sentState, setSentState] = useState<"idle" | "sending" | "sent">("idle");
@@ -210,7 +210,7 @@ export default function AiSuggestionBanner({
           {/* Regénérer */}
           <button
             type="button"
-            onClick={() => requestSuggestion(suggestion.conversationId)}
+            onClick={() => toast.info("Régénération indisponible dans ce stub Inbox")}
             className="mt-2 text-[11px] font-medium text-iris/80 underline decoration-iris/40 underline-offset-2 transition-colors hover:text-iris"
           >
             Régénérer une autre proposition

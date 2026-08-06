@@ -15,7 +15,7 @@ import { EmptyState } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
 import { AGENT_META, COLOR_STYLES, timeAgo } from "./data";
 import { ConfidenceRing, SectionHead } from "./controls";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
 
 function initials(name: string) {

@@ -17,7 +17,7 @@ import {
   type ChatMessage as Msg, type ChatSource, type Persona,
 } from "./data";
 import { ConfidenceRing, SectionHead, ThresholdSlider, Toggle } from "./controls";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
 
 interface LocalMsg extends Msg {
@@ -197,13 +197,19 @@ export default function TestChat() {
 
   /* Reset quand l'agent change : message d'accueil */
   useEffect(() => {
-    setMessages([
-      { id: uid("m"), from: "agent", text: AGENT_META[agent.id].greeting },
-    ]);
-    setThinking(null);
+    const timeout = setTimeout(() => {
+      setMessages([
+        { id: uid("m"), from: "agent", text: AGENT_META[agent.id].greeting },
+      ]);
+      setThinking(null);
+    }, 0);
+    return () => clearTimeout(timeout);
   }, [agent.id]);
 
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  useEffect(() => {
+    const currentTimers = timers.current;
+    return () => currentTimers.forEach(clearTimeout);
+  }, []);
 
   /* Auto-scroll */
   useEffect(() => {
@@ -260,7 +266,7 @@ export default function TestChat() {
     toast.success("Merci — feedback transmis à l'entraînement de l'agent.");
   };
 
-  const onTransfer = (_id: string) => {
+  const onTransfer = () => {
     if (messages.some((m) => m.from === "system")) return;
     setMessages((ms) => [
       ...ms,

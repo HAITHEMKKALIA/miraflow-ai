@@ -24,6 +24,7 @@ import Settings from "@/pages/Settings";
 import SuperAdmin from "@/pages/SuperAdmin";
 import AdminLogin from "@/pages/AdminLogin";
 import RequireOwner from "@/components/app/RequireOwner";
+import RequireTenant from "@/components/app/RequireTenant";
 import { startSimEngine, stopSimEngine } from "@/lib/sim/store";
 
 export default function App() {
@@ -46,8 +47,14 @@ export default function App() {
       {/* Connexion propriétaire (plein écran, hors shell) */}
       <Route path="/admin/login" element={<AdminLogin />} />
 
-      {/* Application — routes imbriquées sous AppShell (rend <Outlet/>) */}
-      <Route element={<AppShell />}>
+      {/* Application tenant — nécessite une session espace */}
+      <Route
+        element={(
+          <RequireTenant>
+            <AppShell />
+          </RequireTenant>
+        )}
+      >
         <Route path="/app" element={<Dashboard />} />
         <Route path="/app/inbox" element={<Inbox />} />
         <Route path="/app/contacts" element={<Contacts />} />
@@ -55,6 +62,10 @@ export default function App() {
         <Route path="/app/workflows" element={<Workflows />} />
         <Route path="/app/agents" element={<Agents />} />
         <Route path="/app/settings" element={<Settings />} />
+      </Route>
+
+      {/* Console propriétaire — garde dédiée */}
+      <Route element={<AppShell />}>
         <Route
           path="/admin"
           element={

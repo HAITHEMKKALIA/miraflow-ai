@@ -48,7 +48,9 @@ function EditableField({
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(value);
   const [saved, setSaved] = useState(false);
-  useEffect(() => setVal(value), [value]);
+  useEffect(() => {
+    setVal(value);
+  }, [value]);
   const commit = () => {
     setEditing(false);
     if (val.trim() && val !== value) {

@@ -10,7 +10,7 @@ import { useAgents } from "@/lib/sim/store";
 import { cn } from "@/lib/utils";
 import { AGENT_META, COLOR_STYLES, timeAgo } from "./data";
 import { SectionHead } from "./controls";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 
 const DECISIONS = ["Toutes", "Approuvée", "Modifiée", "Rejetée", "En attente", "—"] as const;
 

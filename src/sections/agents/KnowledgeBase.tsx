@@ -18,7 +18,7 @@ import {
   type KnowledgeDoc,
 } from "./data";
 import { SectionHead } from "./controls";
-import { useAgentsPage } from "./context";
+import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
 
 const KIND_ICON = { pdf: FileType, docx: FileText, txt: FileText, url: Globe } as const;

@@ -14,7 +14,6 @@ import {
 import { toast } from "sonner";
 import type { Contact } from "@/lib/sim/store";
 import { useSim } from "@/lib/sim/store";
-import type { DisplayMsg } from "./thread";
 import { SAVED_REPLIES, fillReplyVars, splitVars } from "./data";
 import { getProfile } from "../contacts/shared";
 import { MenuItem, Popover } from "./ui";
@@ -41,6 +40,13 @@ export interface RichPayload {
   docSize?: string;
   audioSec?: number;
   carousel?: string[];
+}
+
+export interface DisplayMsg {
+  id: string;
+  direction: "in" | "out";
+  body?: string;
+  docName?: string;
 }
 
 export interface ComposerProps {
@@ -82,6 +88,13 @@ export default function Composer({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const valueRef = useRef(value);
   valueRef.current = value;
+
+  function grow() {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 5 * 22 + 20)}px`;
+  }
 
   const vars = useMemo(() => {
     const profile = contact ? getProfile(contact) : undefined;
@@ -143,14 +156,6 @@ export default function Composer({
     window.addEventListener("mf:composer", handler);
     return () => window.removeEventListener("mf:composer", handler);
   }, [convId]);
-
-  /* Auto-grandissement (max ~5 lignes) */
-  const grow = () => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 5 * 22 + 20)}px`;
-  };
   useEffect(() => {
     grow();
   }, [value]);

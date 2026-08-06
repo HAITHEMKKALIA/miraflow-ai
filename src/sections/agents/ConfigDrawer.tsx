@@ -13,7 +13,8 @@ import { Drawer } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
 import { AGENT_META, COLOR_STYLES, escalationRate } from "./data";
 import { ThresholdSlider, Toggle } from "./controls";
-import { useAgentsPage, type AgentConfig } from "./context";
+import { useAgentsPage } from "./hooks";
+import type { AgentConfig } from "./data";
 import { EASE } from "./motion";
 
 const TABS = ["Identité", "Comportement", "Connaissances", "Escalade"] as const;

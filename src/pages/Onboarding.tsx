@@ -6,14 +6,19 @@
  *                 → connexion QR → équipe → lancement, puis /app)
  * Monte un <Toaster/> local (ces routes sont hors AppShell) + grain global.
  */
-import { useLocation } from "react-router";
+import { Navigate, useLocation } from "react-router";
 import { Toaster } from "sonner";
 import AuthScreen from "@/sections/onboarding/AuthScreen";
 import WizardScreen from "@/sections/onboarding/WizardScreen";
+import { isTenantAuthed } from "@/lib/tenant";
 
 export default function Onboarding() {
   const { pathname } = useLocation();
   const isAuth = pathname.startsWith("/auth");
+
+  if (isAuth && isTenantAuthed()) {
+    return <Navigate to="/app" replace />;
+  }
 
   return (
     <div className="grain">

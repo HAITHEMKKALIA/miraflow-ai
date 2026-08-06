@@ -6,7 +6,7 @@
  * Consomme le SimEngine (agents, suggestions, conversations) sans le modifier.
  */
 import {
-  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
   type ReactNode, type RefObject,
 } from "react";
 import { toast } from "sonner";
@@ -15,27 +15,11 @@ import type { AgentMode, AiSuggestion } from "@/lib/sim/store";
 import {
   EXTRA_AGENTS, SEED_DOCS, SEED_SUGGESTION_TEXTS, UPLOAD_POOL,
   seedJournal, uid,
-  type JournalEntry, type KnowledgeDoc,
+  type AgentConfig, type AgentsPageCtx, type JournalEntry, type KnowledgeDoc,
 } from "./data";
+import { Ctx } from "./context-object";
 
 /* ── Configuration par agent (drawer S3) ───────────────────────────────── */
-export interface AgentConfig {
-  name: string;
-  tone: "Formel" | "Chaleureux" | "Concis";
-  langs: string[];
-  signature: string;
-  threshold: number;
-  activeFrom: string;
-  activeTo: string;
-  maxMessages: number;
-  forbidden: string[];
-  docIds: string[];
-  escalationKeywords: string[];
-  escalateOnNegative: boolean;
-  escalateAfterExchanges: boolean;
-  escalateTo: string;
-}
-
 function defaultConfigs(): Record<string, AgentConfig> {
   const mk = (name: string, docIds: string[]): AgentConfig => ({
     name,
@@ -63,53 +47,6 @@ function defaultConfigs(): Record<string, AgentConfig> {
     ag_translate: { ...mk("Traduction", ["doc_faq", "doc_horaires"]), langs: ["FR", "AR", "EN"] },
     ag_vision: mk("Analyse d'images", ["doc_catalogue", "doc_tarifs"]),
   };
-}
-
-/* ── Type du contexte ──────────────────────────────────────────────────── */
-interface AgentsPageCtx {
-  modes: Record<string, AgentMode>;
-  paused: Record<string, boolean>;
-  toggleMode: (agentId: string) => void;
-  togglePaused: (agentId: string) => void;
-  setAllModes: (mode: AgentMode) => void;
-  autonomousCount: number;
-
-  threshold: number;
-  setThreshold: (v: number) => void;
-
-  docs: KnowledgeDoc[];
-  addDoc: () => void;
-  removeDoc: (id: string) => void;
-  reindexDoc: (id: string) => void;
-  toggleDocAgent: (docId: string, agentId: string) => void;
-  totalFragments: number;
-
-  configs: Record<string, AgentConfig>;
-  configAgentId: string | null;
-  openConfig: (agentId: string) => void;
-  closeConfig: () => void;
-  saveConfig: (agentId: string, cfg: AgentConfig) => void;
-  updatedAt: Record<string, number>;
-
-  chatAgentId: string;
-  setChatAgentId: (id: string) => void;
-  testAgent: (id: string) => void;
-
-  journal: JournalEntry[];
-  pushJournal: (e: Omit<JournalEntry, "id" | "at">) => void;
-
-  chatRef: RefObject<HTMLDivElement | null>;
-  kbRef: RefObject<HTMLDivElement | null>;
-  queueRef: RefObject<HTMLDivElement | null>;
-  scrollTo: (r: RefObject<HTMLDivElement | null>) => void;
-}
-
-const Ctx = createContext<AgentsPageCtx | null>(null);
-
-export function useAgentsPage(): AgentsPageCtx {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useAgentsPage doit être utilisé sous <AgentsProvider>");
-  return ctx;
 }
 
 /* ── Provider ──────────────────────────────────────────────────────────── */
@@ -276,7 +213,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   const globalJournal = useSim((s) => s.journal);
   const pushGlobalJournal = useSim((s) => s.pushJournal);
 
-  const [localJournal, setLocalJournal] = useState<JournalEntry[]>(() =>
+  const [localJournal] = useState<JournalEntry[]>(() =>
     seedJournal(
       agents.map((a) => ({ id: a.id, name: a.name })),
       contacts.slice(0, 8).map((c) => c.name),
@@ -305,7 +242,6 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       status: "pending" as const,
     }));
     useSim.setState((s) => ({ suggestions: [...seeds, ...s.suggestions] }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* Nouvelle suggestion SimEngine → entrée de journal « En attente » */

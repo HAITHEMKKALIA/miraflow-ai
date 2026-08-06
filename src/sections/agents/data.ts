@@ -8,10 +8,29 @@ import {
   Briefcase, CalendarCheck, ChartLine, Headset, Languages, ScanSearch, ShieldCheck, Wrench,
   type LucideIcon,
 } from "lucide-react";
+import type { RefObject } from "react";
 import type { AgentMode, AiAgent } from "@/lib/sim/store";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 export type AgentColor = "iris" | "pulse" | "mint" | "amber" | "rose" | "hi";
+
+/* ── Configuration par agent (drawer S3) ───────────────────────────────── */
+export interface AgentConfig {
+  name: string;
+  tone: "Formel" | "Chaleureux" | "Concis";
+  langs: string[];
+  signature: string;
+  threshold: number;
+  activeFrom: string;
+  activeTo: string;
+  maxMessages: number;
+  forbidden: string[];
+  docIds: string[];
+  escalationKeywords: string[];
+  escalateOnNegative: boolean;
+  escalateAfterExchanges: boolean;
+  escalateTo: string;
+}
 
 export interface AgentMeta {
   icon: LucideIcon;
@@ -71,6 +90,45 @@ export interface JournalEntry {
   confidence: number;
   decision: "Approuvée" | "Modifiée" | "Rejetée" | "En attente" | "—";
   latencyS: number;
+}
+
+/* ── Type du contexte ──────────────────────────────────────────────────── */
+export interface AgentsPageCtx {
+  modes: Record<string, AgentMode>;
+  paused: Record<string, boolean>;
+  toggleMode: (agentId: string) => void;
+  togglePaused: (agentId: string) => void;
+  setAllModes: (mode: AgentMode) => void;
+  autonomousCount: number;
+
+  threshold: number;
+  setThreshold: (v: number) => void;
+
+  docs: KnowledgeDoc[];
+  addDoc: () => void;
+  removeDoc: (id: string) => void;
+  reindexDoc: (id: string) => void;
+  toggleDocAgent: (docId: string, agentId: string) => void;
+  totalFragments: number;
+
+  configs: Record<string, AgentConfig>;
+  configAgentId: string | null;
+  openConfig: (agentId: string) => void;
+  closeConfig: () => void;
+  saveConfig: (agentId: string, cfg: AgentConfig) => void;
+  updatedAt: Record<string, number>;
+
+  chatAgentId: string;
+  setChatAgentId: (id: string) => void;
+  testAgent: (id: string) => void;
+
+  journal: JournalEntry[];
+  pushJournal: (e: Omit<JournalEntry, "id" | "at">) => void;
+
+  chatRef: RefObject<HTMLDivElement | null>;
+  kbRef: RefObject<HTMLDivElement | null>;
+  queueRef: RefObject<HTMLDivElement | null>;
+  scrollTo: (r: RefObject<HTMLDivElement | null>) => void;
 }
 
 export type Persona = "vip" | "nouveau" | "frustre";

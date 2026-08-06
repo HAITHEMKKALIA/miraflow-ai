@@ -17,18 +17,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useTenants, type PlanId, type Tenant } from "@/lib/sim/store";
-import ContextBar from "@/sections/superadmin/ContextBar";
-import RequestsPanel from "@/sections/superadmin/RequestsPanel";
-import PlatformKpis from "@/sections/superadmin/PlatformKpis";
-import RevenueCharts from "@/sections/superadmin/RevenueCharts";
-import TenantsTable from "@/sections/superadmin/TenantsTable";
-import SessionsMap from "@/sections/superadmin/SessionsMap";
-import Incidents from "@/sections/superadmin/Incidents";
-import PlanQuotas from "@/sections/superadmin/PlanQuotas";
-import WhiteLabel from "@/sections/superadmin/WhiteLabel";
-import Resellers from "@/sections/superadmin/Resellers";
-import PromoCodes from "@/sections/superadmin/PromoCodes";
-import Maintenance from "@/sections/superadmin/Maintenance";
+import ContextBar, {
+  RequestsPanel, PlatformKpis, RevenueCharts, TenantsTable,
+  SessionsMap, Incidents, PlanQuotas, WhiteLabel, Resellers,
+  PromoCodes, Maintenance
+} from "@/sections/superadmin/Sections";
 import {
   DEFAULT_QUOTAS, PLATFORM, PLAN_META, tenantExtra, type RichTenant, type TenantExtra,
   type TenantStatus,

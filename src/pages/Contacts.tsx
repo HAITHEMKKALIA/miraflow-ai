@@ -78,7 +78,10 @@ export default function Contacts() {
     const t = setTimeout(() => setLoading(false), 700);
     return () => clearTimeout(t);
   }, []);
-  useEffect(() => setPage(1), [debounced, stageF, segmentF, tagF, consentF, scoreMin]);
+  useEffect(() => {
+    const timeout = setTimeout(() => setPage(1), 0);
+    return () => clearTimeout(timeout);
+  }, [debounced, stageF, segmentF, tagF, consentF, scoreMin]);
 
   const segmentName = (c: Contact): string => SEGMENTS.find((s) => s.predicate(c, getProfile(c)))?.name ?? "—";
 
@@ -118,7 +121,10 @@ export default function Contacts() {
   /* Ramène la page courante dans la plage si le total diminue (suppression) */
   const maxPage = Math.max(1, Math.ceil(total / perPage));
   useEffect(() => {
-    if (page > maxPage) setPage(maxPage);
+    if (page > maxPage) {
+      const timeout = setTimeout(() => setPage(maxPage), 0);
+      return () => clearTimeout(timeout);
+    }
   }, [page, maxPage]);
 
   const activeFilters: { key: string; label: string; clear: () => void }[] = [];
@@ -286,7 +292,7 @@ export default function Contacts() {
 
             {/* Colonnes */}
             <Popover align="end"
-              trigger={(open, toggle) => (
+              trigger={(open: boolean, toggle: () => void) => (
                 <button type="button" onClick={toggle} title="Afficher / masquer des colonnes"
                   className={cn("flex size-9 items-center justify-center rounded-r-sm border transition-colors",
                     open ? "border-iris/50 bg-surface-3 text-hi" : "border-line bg-surface-2 text-mid hover:bg-surface-3 hover:text-hi")}>

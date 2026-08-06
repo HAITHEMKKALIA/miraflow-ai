@@ -725,7 +725,7 @@ export const useSim = create<SimState>()(
       addSuggestion: (sug) =>
         set((s) => ({
           suggestions: [
-            { ...sug, id: uid("sug"), at: Date.now(), status: "pending" },
+            { ...sug, id: uid("sug"), at: Date.now(), status: "pending" as const },
             ...s.suggestions,
           ].slice(0, 50),
         })),
