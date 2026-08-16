@@ -212,7 +212,7 @@ export default function ContactPanel({ contact, conversations, onMessage }: Cont
       {/* En-tête */}
       <div className="shrink-0 border-b border-line p-4">
         <div className="flex items-start gap-3">
-          <GradientAvatar name={effective.name} size={56} />
+          <GradientAvatar name={effective.name} size={56} src={effective.avatarUrl} />
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-semibold text-hi">{effective.name}</p>
             <p className="truncate font-mono text-[11px] tabular text-low" dir="ltr">{effective.phone}</p>

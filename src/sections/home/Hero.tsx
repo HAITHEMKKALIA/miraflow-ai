@@ -2,7 +2,7 @@
  * S1. Hero — « La constellation de vos conversations » (home.md).
  * Fond WebGL (HeroCanvas) + contenu : sur-titre mono, titre cinétique split
  * caractères, sous-titre, 2 CTA, ligne de preuve, indicateur scroll,
- * bandeau « Démo live » alimenté par le SimEngine.
+ * bandeau d’aperçu produit.
  */
 import { Suspense, lazy } from "react";
 import { Link } from "react-router";
@@ -47,8 +47,8 @@ function KineticWord({
   );
 }
 
-/** Bandeau « Démo live » (bas droite, glass, ~300px) — télémétrie SimEngine */
-function DemoBanner() {
+/** Bandeau d’aperçu produit basé sur l’état courant. */
+function OverviewBanner() {
   const kpis = useKpis();
   return (
     <motion.button
@@ -60,7 +60,7 @@ function DemoBanner() {
       className="glass absolute bottom-8 right-6 z-20 hidden w-[300px] rounded-r-md p-4 text-start md:block lg:right-10"
     >
       <p className="label-micro flex items-center gap-2 text-mint">
-        <StatusDot tone="mint" /> Démo live
+        <StatusDot tone="mint" /> Vue produit
       </p>
       <p className="mt-3 font-display text-[22px] font-semibold text-hi">
         <TickNumber value={kpis.messagesToday} />{" "}
@@ -153,7 +153,7 @@ export default function Hero() {
               </svg>
               <Play className="size-2.5 fill-current text-pulse transition-transform group-hover:scale-125" />
             </span>
-            Voir la démo live
+            Découvrir la plateforme
           </button>
         </motion.div>
 
@@ -183,7 +183,7 @@ export default function Hero() {
         </span>
       </motion.button>
 
-      <DemoBanner />
+      <OverviewBanner />
     </section>
   );
 }

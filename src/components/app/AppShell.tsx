@@ -35,6 +35,8 @@ import { LANGS, useI18n } from "@/lib/i18n";
 import { isOwnerAuthed, ownerLogout } from "@/lib/owner";
 import StatusDot from "@/components/ui-shared/StatusDot";
 import CommandPalette from "./CommandPalette";
+import BridgeInboxSync from "./BridgeInboxSync";
+import BridgeRuntimeBootstrap from "./BridgeRuntimeBootstrap";
 import AIOrchestrator from "@/sections/agents/AIOrchestrator";
 import { cn } from "@/lib/utils";
 
@@ -298,6 +300,8 @@ export default function AppShell() {
 
   return (
     <div className="flex min-h-[100dvh] bg-base">
+      <BridgeRuntimeBootstrap />
+      <BridgeInboxSync />
       <AIOrchestrator />
       <Toaster
         position="top-right"

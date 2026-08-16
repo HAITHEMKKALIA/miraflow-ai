@@ -6,15 +6,13 @@
  *   - App       : <AppShell/> (sidebar + topbar) avec routes imbriquées
  * Les deux layouts rendent <Outlet/> — ne PAS passer de children.
  *
- * Le SimEngine (émetteurs temps réel) démarre une fois au montage.
  */
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router";
 import Layout from "@/components/Layout";
 import AppShell from "@/components/app/AppShell";
 import RequireOwner from "@/components/app/RequireOwner";
 import RequireTenant from "@/components/app/RequireTenant";
-import { startSimEngine, stopSimEngine } from "@/lib/sim/store";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Onboarding = lazy(() => import("@/pages/Onboarding"));
@@ -37,11 +35,6 @@ function RouteFallback() {
 }
 
 export default function App() {
-  useEffect(() => {
-    startSimEngine();
-    return () => stopSimEngine();
-  }, []);
-
   return (
     <Suspense fallback={<RouteFallback />}>
       <Routes>

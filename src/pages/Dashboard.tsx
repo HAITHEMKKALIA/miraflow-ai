@@ -7,6 +7,7 @@
  */
 import { useState } from "react";
 import { toast } from "sonner";
+import { persistBridgeSession } from "@/lib/bridge";
 import {
   usePendingSuggestions, useSessions, useSim, type QrSession, type SessionStatus,
 } from "@/lib/sim/store";
@@ -32,13 +33,10 @@ function displayPhone(raw?: string): string {
   return `+${d.slice(0, 3)} ${d.slice(3, 5)} ${d.slice(5, 8)} ${d.slice(8)}`.trim();
 }
 
-/** Suggestions IA seedées (design) + file live du SimEngine */
-const AI_BASELINE = 3;
-
 export default function Dashboard() {
   const sessions = useSessions();
   const livePending = usePendingSuggestions().length;
-  const demoMode = useSim((s) => s.demoMode);
+  const orgName = useSim((s) => s.org.name);
 
   const [period, setPeriod] = useState<Period>("today");
   const [qrFor, setQrFor] = useState<string | null>(null); // id session existante | id frais (nouvelle)
@@ -84,6 +82,13 @@ export default function Dashboard() {
         connectedAt: Date.now(),
       };
       useSim.setState((st) => ({ sessions: [...st.sessions, session] }));
+      void persistBridgeSession({
+        orgName,
+        sessionId: session.id,
+        sessionName: session.name,
+        sessionPhone: session.phone,
+        sessionStatus: session.status,
+      });
       toast.success("Session connectée", {
         description: `« ${name} » (${phone || "numéro en cours de récupération"}) est prête.`,
       });
@@ -100,6 +105,13 @@ export default function Dashboard() {
         const next = { ...o };
         delete next[qrFor];
         return next;
+      });
+      void persistBridgeSession({
+        orgName,
+        sessionId: qrFor,
+        sessionName: name,
+        sessionPhone: phone || sessions.find((s) => s.id === qrFor)?.phone,
+        sessionStatus: "connected",
       });
       toast.success(`Session « ${name} » reconnectée`, {
         description: phone ? `Numéro ${phone} — les envois reprennent.` : "Les envois reprennent normalement.",
@@ -123,7 +135,7 @@ export default function Dashboard() {
 
       <AlertsBanner
         sessionDisconnected={sessionDisconnected}
-        pendingSuggestions={(demoMode ? AI_BASELINE : 0) + livePending}
+        pendingSuggestions={livePending}
         onReconnect={() => setQrFor("s_events")}
       />
 

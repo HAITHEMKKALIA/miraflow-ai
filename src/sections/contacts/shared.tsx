@@ -47,35 +47,52 @@ const AVATAR_GRADIENTS: [string, string][] = [
   ["#FFB84D", "#FF6B7A"],
   ["#0DBA9B", "#FF9F2E"],
   ["#FF9F2E", "#FF5A4E"],
-  ["#FF6B7A", "#FF5A4E"],
 ];
+
+import { useState, type ReactNode } from "react";
 
 export function GradientAvatar({
   name,
   size = 44,
   className,
   ring,
+  src,
 }: {
   name: string;
   size?: number;
   className?: string;
   /** badge (présence/statut) à chevaucher en coin */
-  ring?: React.ReactNode;
+  ring?: ReactNode;
+  /** Image source URL */
+  src?: string;
 }) {
   const h = hashStr(name);
   const [c1, c2] = AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
+  const [imgError, setImgError] = useState(false);
+
+  const hasImg = src && src !== "none" && !imgError;
+
   return (
     <span
       className={cn("relative inline-flex shrink-0 items-center justify-center rounded-full font-semibold text-white", className)}
       style={{
         width: size,
         height: size,
-        background: `linear-gradient(135deg, ${c1}, ${c2})`,
+        background: hasImg ? "none" : `linear-gradient(135deg, ${c1}, ${c2})`,
         fontSize: Math.max(10, Math.round(size * 0.34)),
       }}
       aria-hidden
     >
-      {initials(name)}
+      {hasImg ? (
+        <img
+          src={src}
+          alt={name}
+          className="size-full rounded-full object-cover"
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        initials(name)
+      )}
       {ring}
     </span>
   );

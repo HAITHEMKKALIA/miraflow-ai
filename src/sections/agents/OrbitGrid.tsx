@@ -52,7 +52,7 @@ const AgentCard = memo(function AgentCard({
   agent: AiAgent;
   index: number;
 }) {
-  const meta = AGENT_META[agent.id];
+  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"]; // Fallback to analyst if missing
   const styles = COLOR_STYLES[meta.color];
   const { modes, paused, toggleMode, togglePaused, openConfig, testAgent, updatedAt } = useAgentsPage();
   const mode = modes[agent.id] ?? agent.mode;

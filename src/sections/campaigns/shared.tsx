@@ -1,11 +1,9 @@
 /**
  * sections/campaigns/shared.tsx — socle du Studio Campagnes (campaigns.md).
  *
- * Types locaux (StudioCampaign enrichit le Campaign du SimEngine), méta
- * objectifs/statuts, campagnes seed complémentaires, personas de
- * prévisualisation, segments d'audience calculés sur les contacts du
- * SimEngine, tokenisation des variables {{prenom}}… et petits utilitaires
- * (rng déterministe, formatage). Aucune donnée ne vient d'un backend.
+ * Types locaux du Studio Campagnes, méta objectifs/statuts, segments
+ * d'audience calculés sur les contacts disponibles, tokenisation des
+ * variables {{prenom}}… et petits utilitaires de formatage.
  */
 import type { Campaign, CampaignStatus, Contact } from "@/lib/sim/store";
 import type { StatusTone } from "@/components/ui-shared/StatusDot";
@@ -17,6 +15,7 @@ export type CampaignGoal = "promotion" | "relance" | "annonce" | "fidelisation";
 export type StudioStatus = CampaignStatus | "review";
 
 export interface StudioCampaign extends Omit<Campaign, "status"> {
+  remoteId?: string;
   status: StudioStatus;
   goal: CampaignGoal;
   unsubscribed: number;
@@ -33,6 +32,12 @@ export interface StudioCampaign extends Omit<Campaign, "status"> {
   stopOnReply?: boolean;
   /** Type de relance : manuel (humain) ou automatisé (IA). */
   relanceType?: "human" | "ai";
+  /** Destinataires exacts d'une campagne créée localement. */
+  recipientIds?: string[];
+  /** Session QR réellement utilisée pour l'envoi. */
+  bridgeSessionId?: string;
+  /** Position de dispatch dans la file d'envoi réelle. */
+  dispatchCursor?: number;
 }
 
 /** Format d'envoi du carrousel intelligent (étape Contenu). */
@@ -77,7 +82,7 @@ export const STATUS_META: Record<StudioStatus, { label: string; tone: StatusTone
 /** Seuil d'audience déclenchant la validation à quatre yeux. */
 export const REVIEW_THRESHOLD = 500;
 
-/* ── Campagnes seed complémentaires (le SimEngine en fournit 4) ────────── */
+/* ── Mapping campagnes legacy ──────────────────────────────────────────── */
 export const GOAL_BY_ID: Record<string, CampaignGoal> = {
   cp_aid: "promotion",
   cp_relance: "relance",
@@ -85,37 +90,7 @@ export const GOAL_BY_ID: Record<string, CampaignGoal> = {
   cp_vip: "fidelisation",
 };
 
-export const EXTRA_CAMPAIGNS: StudioCampaign[] = [
-  {
-    id: "cp_sondage",
-    name: "Sondage satisfaction",
-    status: "draft",
-    audience: "Audience à définir",
-    total: 0,
-    sent: 0,
-    delivered: 0,
-    replies: 0,
-    failed: 0,
-    goal: "annonce",
-    unsubscribed: 0,
-    ratePerMin: 15,
-  },
-  {
-    id: "cp_bienvenue",
-    name: "Bienvenue nouveaux clients",
-    status: "done",
-    audience: "Segment : nouveaux contacts 30 j (412 contacts)",
-    total: 412,
-    sent: 412,
-    delivered: 401,
-    replies: 73,
-    failed: 4,
-    goal: "fidelisation",
-    unsubscribed: 1,
-    ratePerMin: 15,
-    mediaUrl: "/product-textile.png",
-  },
-];
+export const EXTRA_CAMPAIGNS: StudioCampaign[] = [];
 
 const UNSUB_BY_ID: Record<string, number> = { cp_aid: 2, cp_ramadan: 9, cp_relance: 0, cp_vip: 0 };
 
@@ -276,3 +251,4 @@ export const TIMEZONES = [
 
 /** Clé localStorage du brouillon d'assistant campagne. */
 export const DRAFT_KEY = "mf:campaign-draft";
+export const LOCAL_CAMPAIGNS_KEY = "mf:campaigns-local";

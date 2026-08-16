@@ -6,7 +6,7 @@
  * mini-barres). Reconnecter → modale QR ; passage Déconnectée→Connectée :
  * onde mint + toast. Session « Instable » : latence scintillante amber.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { BatteryMedium, ChevronRight, History, RefreshCw, Smartphone } from "lucide-react";
 import { useNavigate } from "react-router";
@@ -74,24 +74,6 @@ function SessionRow({
   onOpen: () => void;
   onReconnect: () => void;
 }) {
-  const [lat, setLat] = useState(session.latencyMs);
-  const baseRef = useRef(session.latencyMs);
-  baseRef.current = session.latencyMs;
-
-  // Latence qui tique toutes les 2 s (jitter autour de la base SimEngine)
-  useEffect(() => {
-    if (session.status === "disconnected") {
-      setLat(0);
-      return;
-    }
-    setLat(session.latencyMs);
-    const id = setInterval(() => {
-      const jitter = Math.round((Math.random() - 0.5) * 12);
-      setLat(Math.max(38, Math.min(160, baseRef.current + jitter)));
-    }, 2000);
-    return () => clearInterval(id);
-  }, [session.latencyMs, session.status]);
-
   const tone = STATUS_TONE[session.status];
   const disconnected = session.status === "disconnected";
 
@@ -146,7 +128,7 @@ function SessionRow({
               "hors ligne"
             ) : (
               <span className={cn("tabular", session.status === "unstable" && "animate-pulse text-amber")}>
-                <TickNumber value={lat} /> ms
+                <TickNumber value={session.latencyMs} /> ms
               </span>
             )}
             <span className="mx-1.5 text-line-strong">·</span>

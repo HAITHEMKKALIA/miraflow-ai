@@ -14,7 +14,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Contact, CrmStage } from "@/lib/sim/store";
-import { useConversations, useContacts } from "@/lib/sim/store";
+import { useConversations, useContacts, useSim } from "@/lib/sim/store";
+import { persistBridgeContact } from "@/lib/bridge";
 import ContactsTable, { OPTIONAL_COLS } from "@/sections/contacts/ContactsTable";
 import type { ColKey, Density, SortKey } from "@/sections/contacts/ContactsTable";
 import ContactDrawer from "@/sections/contacts/ContactDrawer";
@@ -43,6 +44,7 @@ export default function Contacts() {
   const navigate = useNavigate();
   const baseContacts = useContacts();
   const conversations = useConversations();
+  const orgName = useSim((s) => s.org.name);
   const overrides = useCrm((s) => s.overrides);
   const extra = useCrm((s) => s.extra);
   const deleted = useCrm((s) => s.deleted);
@@ -433,8 +435,33 @@ export default function Contacts() {
 
       {/* ── Drawer + modales ── */}
       <ContactDrawer contact={drawer} conversations={conversations} onClose={() => setDrawer(null)} onMessage={onMessage} onDelete={(id) => onDelete([id])} />
-      <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} onImport={(list) => addContacts(list)} />
-      <NewContactModal open={newOpen} onClose={() => setNewOpen(false)} onCreate={(c) => addContacts([c])} />
+      <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} onImport={(list) => {
+        addContacts(list);
+        Promise.all(list.map(c => persistBridgeContact({
+          orgName,
+          contact: c
+        }))).catch(console.error);
+      }} />
+      <NewContactModal
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        onCreate={(c) => {
+          addContacts([c]);
+          void persistBridgeContact({
+            orgName,
+            contact: {
+              id: c.id,
+              name: c.name,
+              phone: c.phone,
+              city: c.city,
+              tags: c.tags,
+              score: c.score,
+              stage: c.stage,
+              consent: c.consent,
+            },
+          });
+        }}
+      />
     </div>
   );
 }

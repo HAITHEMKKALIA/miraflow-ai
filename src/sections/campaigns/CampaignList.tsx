@@ -10,7 +10,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Check, ChevronRight, Clock, Copy, Download, FilePenLine, Megaphone,
   MoreHorizontal, OctagonX, Pause, Play, Plus, ShieldCheck, TrendingUp,
-  User, Sparkles,
+  User, Sparkles, Trash2
 } from "lucide-react";
 import { EmptyState, StatusDot, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
@@ -88,7 +88,7 @@ export function StatusChip({ status }: { status: StudioStatus }) {
 
 /* ── Menu ⋯ ────────────────────────────────────────────────────────────── */
 function RowMenu({
-  onDuplicate, onEdit, onTrack, onExport, onStop, onRelanceHuman, onRelanceAi, stoppable,
+  onDuplicate, onEdit, onTrack, onExport, onStop, onRelanceHuman, onRelanceAi, stoppable, onDelete
 }: {
   onDuplicate: () => void;
   onEdit: () => void;
@@ -97,6 +97,7 @@ function RowMenu({
   onStop: () => void;
   onRelanceHuman: () => void;
   onRelanceAi: () => void;
+  onDelete: () => void;
   stoppable: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -138,7 +139,7 @@ function RowMenu({
             <button type="button" className={item} onClick={() => { setOpen(false); onTrack(); }}>
               <TrendingUp className="size-3.5" /> Suivi
             </button>
-            
+
             <div className="my-1 border-t border-line" />
             <button type="button" className={item} onClick={() => { setOpen(false); onRelanceHuman(); }}>
               <User className="size-3.5 text-mid" /> Relancer avec humain
@@ -156,13 +157,21 @@ function RowMenu({
                 <div className="my-1 border-t border-line" />
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] text-rose transition-colors hover:bg-rose/10"
+                  className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] text-amber transition-colors hover:bg-amber/10"
                   onClick={() => { setOpen(false); onStop(); }}
                 >
                   <OctagonX className="size-3.5" /> Arrêt d'urgence
                 </button>
               </>
             )}
+            <div className="my-1 border-t border-line" />
+            <button
+              type="button"
+              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] text-rose transition-colors hover:bg-rose/10"
+              onClick={() => { setOpen(false); onDelete(); }}
+            >
+              <Trash2 className="size-3.5" /> Supprimer
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
@@ -173,7 +182,7 @@ function RowMenu({
 /* ── Ligne campagne ────────────────────────────────────────────────────── */
 function CampaignRow({
   c, index, onPauseToggle, onTrack, onStop, onDuplicate, onEdit, onExport, onValidate,
-  onRelanceHuman, onRelanceAi,
+  onRelanceHuman, onRelanceAi, onDelete,
 }: {
   c: StudioCampaign;
   index: number;
@@ -186,6 +195,7 @@ function CampaignRow({
   onValidate: (c: StudioCampaign) => void;
   onRelanceHuman: (c: StudioCampaign) => void;
   onRelanceAi: (c: StudioCampaign) => void;
+  onDelete: (c: StudioCampaign) => void;
 }) {
   const goal = GOAL_META[c.goal];
   const progress = c.total > 0 ? c.sent / c.total : 0;
@@ -308,6 +318,7 @@ function CampaignRow({
               onExport={() => onExport(c)}
               onRelanceHuman={() => onRelanceHuman(c)}
               onRelanceAi={() => onRelanceAi(c)}
+              onDelete={() => onDelete(c)}
             />
           </div>
         </div>
@@ -355,6 +366,7 @@ export default function CampaignList({
   onValidate,
   onRelanceHuman,
   onRelanceAi,
+  onDelete,
 }: {
   campaigns: StudioCampaign[];
   hasDraft: boolean;
@@ -370,6 +382,7 @@ export default function CampaignList({
   onValidate: (c: StudioCampaign) => void;
   onRelanceHuman: (c: StudioCampaign) => void;
   onRelanceAi: (c: StudioCampaign) => void;
+  onDelete: (c: StudioCampaign) => void;
 }) {
   const [tab, setTab] = useState<TabId>("all");
 
@@ -501,6 +514,7 @@ export default function CampaignList({
               onValidate={onValidate}
               onRelanceHuman={onRelanceHuman}
               onRelanceAi={onRelanceAi}
+              onDelete={onDelete}
             />
           ))}
         </motion.ul>

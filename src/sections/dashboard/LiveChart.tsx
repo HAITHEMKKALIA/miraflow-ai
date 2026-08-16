@@ -41,9 +41,7 @@ function buildDayData(): Point[] {
   const df = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
   for (let d = 13; d >= 0; d--) {
     const date = new Date(Date.now() - d * 86_400_000);
-    const seed = (date.getDate() * 7 + date.getMonth() * 31) % 100;
-    const v = 780 + Math.round(420 * (0.5 + 0.5 * Math.sin(seed))) + (seed % 3) * 40;
-    out.push({ label: df.format(date), in: v, out: Math.round(v * 0.62) });
+    out.push({ label: df.format(date), in: 0, out: 0 });
   }
   return out;
 }

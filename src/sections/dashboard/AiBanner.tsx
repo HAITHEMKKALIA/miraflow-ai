@@ -12,13 +12,10 @@ import { TickNumber } from "@/components/ui-shared";
 import { usePendingSuggestions } from "@/lib/sim/store";
 import { EASE, GlassButton, MiniCore, PrimaryButton } from "./shared";
 
-/** Suggestions de base seedées + file live du SimEngine */
-const BASELINE = 3;
-
 export default function AiBanner() {
   const navigate = useNavigate();
   const pending = usePendingSuggestions().length;
-  const total = BASELINE + pending;
+  const total = pending;
 
   return (
     <motion.div
@@ -48,8 +45,7 @@ export default function AiBanner() {
             suggestion{total > 1 ? "s" : ""} en attente
           </h3>
           <p className="mt-1 max-w-[56ch] text-[13px] leading-[20px] text-mid">
-            L'agent Commercial a préparé des réponses pour {total} conversation{total > 1 ? "s" : ""}.
-            Validez-les d'un geste, ou laissez l'équipe s'en charger.
+            Réponses IA réellement en attente de validation dans l'espace courant.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2.5">

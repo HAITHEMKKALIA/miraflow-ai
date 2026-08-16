@@ -192,14 +192,14 @@ export default function TestChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const agent = agents.find((a) => a.id === chatAgentId) ?? agents[0];
-  const meta = AGENT_META[agent.id];
+  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"];
   const hasDocs = docs.length > 0;
 
   /* Reset quand l'agent change : message d'accueil */
   useEffect(() => {
     const timeout = setTimeout(() => {
       setMessages([
-        { id: uid("m"), from: "agent", text: AGENT_META[agent.id].greeting },
+        { id: uid("m"), from: "agent", text: (AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"]).greeting },
       ]);
       setThinking(null);
     }, 0);
@@ -299,7 +299,7 @@ export default function TestChat() {
           <p className="label-micro mb-3 text-low">Agent à tester</p>
           <div className="space-y-1.5" role="radiogroup" aria-label="Agent à tester">
             {agents.map((a) => {
-              const m = AGENT_META[a.id];
+              const m = AGENT_META[a.key || a.id] || AGENT_META["ag_analyst"];
               const st = COLOR_STYLES[m.color];
               const selected = a.id === agent.id;
               return (

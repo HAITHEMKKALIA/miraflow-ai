@@ -257,7 +257,7 @@ export default function KnowledgeBase() {
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {doc.agents.map((id) => {
-                            const meta = AGENT_META[id];
+                            const meta = AGENT_META[id] || AGENT_META["ag_analyst"];
                             if (!meta) return null;
                             return (
                               <span

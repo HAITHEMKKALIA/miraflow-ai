@@ -36,8 +36,7 @@ export interface CrmState {
   log: (id: string, item: Omit<HistoryItem, "id" | "at">) => void;
 }
 
-let n = 0;
-const nid = (p: string) => `${p}_${Date.now().toString(36)}_${(n++).toString(36)}`;
+const nid = (_p: string) => crypto.randomUUID();
 
 export const useCrm = create<CrmState>()(
   persist(
@@ -59,7 +58,12 @@ export const useCrm = create<CrmState>()(
       deleteContacts: (ids) =>
         set((s) => ({ deleted: Array.from(new Set([...s.deleted, ...ids])) })),
       setConsent: (id, kind, granted) =>
-        set((s) => ({ consents: { ...s.consents, [id]: { ...s.consents[id], [kind]: granted } } })),
+        set((s) => ({
+          consents: { ...s.consents, [id]: { ...s.consents[id], [kind]: granted } },
+          overrides: kind === "marketing"
+            ? { ...s.overrides, [id]: { ...s.overrides[id], consent: granted } }
+            : s.overrides,
+        })),
       addNote: (id, note) =>
         set((s) => ({ notes: { ...s.notes, [id]: [note, ...(s.notes[id] ?? [])] } })),
       log: (id, item) =>
@@ -70,7 +74,18 @@ export const useCrm = create<CrmState>()(
           },
         })),
     }),
-    { name: "mf:crm" },
+    {
+      name: "mf:crm",
+      version: 3,
+      migrate: () => ({
+        overrides: {},
+        extra: [],
+        deleted: [],
+        consents: {},
+        notes: {},
+        activity: {},
+      }),
+    },
   ),
 );
 

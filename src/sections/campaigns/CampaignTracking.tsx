@@ -21,8 +21,9 @@ import { useContacts, useSessions } from "@/lib/sim/store";
 import { StatusDot, TickNumber } from "@/components/ui-shared";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { mergeContacts, useCrm } from "@/sections/contacts/crmStore";
 import type { StudioCampaign } from "./shared";
-import { REPLY_POOL, fmt, hashId, pct, timeHM, timeHMS } from "./shared";
+import { fmt, pct, timeHM, timeHMS } from "./shared";
 import { StatusChip } from "./CampaignList";
 
 const EASE = [0.22, 1, 0.36, 1] as [number, number, number, number];
@@ -52,6 +53,10 @@ const ROW_STATUS_META: Record<RowStatus, { label: string; cls: string }> = {
   failed: { label: "échoué", cls: "bg-rose/10 text-rose" },
   unsub: { label: "désinscrit", cls: "bg-rose/10 text-rose" },
 };
+
+function maskPhone(phone: string): string {
+  return `${phone.slice(0, 8)} •• •• ${phone.slice(-2)}`;
+}
 
 /* ── Signal line entre les étapes du funnel ────────────────────────────── */
 function SignalConnector() {
@@ -133,7 +138,14 @@ export default function CampaignTracking({
   onPauseToggle: (c: StudioCampaign) => void;
   onStop: (c: StudioCampaign) => void;
 }) {
-  const contacts = useContacts();
+  const baseContacts = useContacts();
+  const overrides = useCrm((state) => state.overrides);
+  const extra = useCrm((state) => state.extra);
+  const deleted = useCrm((state) => state.deleted);
+  const contacts = useMemo(
+    () => mergeContacts(baseContacts, { overrides, extra, deleted }),
+    [baseContacts, overrides, extra, deleted],
+  );
   const sessions = useSessions();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -151,12 +163,14 @@ export default function CampaignTracking({
 
   /* ── Destinataires dérivés des compteurs live ────────────────────────── */
   const recipients = useMemo<RecipientRow[]>(() => {
+    if (!c.recipientIds?.length) return [];
     const rows: RecipientRow[] = [];
-    const n = Math.min(c.total, contacts.length * 2);
+    const recipientContacts = c.recipientIds
+      .map((id) => contacts.find((contact) => contact.id === id))
+      .filter((contact): contact is NonNullable<typeof contact> => Boolean(contact));
     const rngStep = (i: number) => startAt + Math.round((i / Math.max(1, c.ratePerMin)) * 60_000);
-    for (let i = 0; i < n; i++) {
-      const contact = contacts[i % contacts.length];
-      const suffix = i >= contacts.length ? ` ·${Math.floor(i / contacts.length) + 1}` : "";
+    for (let i = 0; i < recipientContacts.length; i++) {
+      const contact = recipientContacts[i];
       let status: RowStatus = "queued";
       if (i < c.failed) status = "failed";
       else if (i < c.failed + c.unsubscribed) status = "unsub";
@@ -165,98 +179,74 @@ export default function CampaignTracking({
       else if (i < c.sent) status = "sent";
       rows.push({
         id: `${c.id}_r${i}`,
-        name: `${contact.name}${suffix}`,
+        name: contact.name,
         phone: contact.phone,
         status,
         at: status === "queued" ? null : rngStep(i),
-        reply: status === "replied" ? REPLY_POOL[(hashId(c.id) + i) % REPLY_POOL.length] : undefined,
       });
     }
     return rows;
-  }, [c.id, c.total, c.sent, c.delivered, c.replies, c.failed, c.unsubscribed, c.ratePerMin, contacts, startAt]);
+  }, [c.recipientIds, c.id, c.sent, c.delivered, c.replies, c.failed, c.unsubscribed, c.ratePerMin, contacts, startAt]);
 
   /* ── Flux d'événements (deltas des compteurs) ────────────────────────── */
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const prevRef = useRef({ sent: c.sent, delivered: c.delivered, replies: c.replies, failed: c.failed, unsub: c.unsubscribed });
   const lastReplyToastRef = useRef(0);
-  const seededRef = useRef(false);
   useEffect(() => {
-    // historique initial pour les campagnes déjà avancées
-    if (seededRef.current) return;
-    seededRef.current = true;
-    if (c.sent === 0) return;
-    const h = hashId(c.id);
-    const seed: StreamEvent[] = [];
-    const base = Date.now();
-    for (let i = 0; i < 8; i++) {
-      const contact = contacts[(h + i * 5) % contacts.length];
-      const kind: StreamEvent["kind"] =
-        i === 1 && c.unsubscribed > 0 ? "unsub" : i % 5 === 4 ? "reply" : i % 7 === 6 ? "failed" : "delivered";
-      seed.push({
-        id: `${c.id}_seed_${i}`,
-        at: base - (8 - i) * 47_000,
-        kind,
-        text:
-          kind === "reply"
-            ? `réponse de ${contact.name.split(" ")[0]} : « ${REPLY_POOL[(h + i) % REPLY_POOL.length]} »`
-            : kind === "failed"
-              ? `échec ${contact.phone.slice(0, 8)} •• •• ${contact.phone.slice(-2)} (numéro indisponible)`
-              : kind === "unsub"
-                ? `STOP reçu de ${contact.name} — désinscrit et ajouté à la liste d'exclusion`
-                : `livré à ${contact.name}`,
-      });
-    }
-    setEvents(seed.reverse());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c.id]);
+    setEvents([]);
+    prevRef.current = { sent: c.sent, delivered: c.delivered, replies: c.replies, failed: c.failed, unsub: c.unsubscribed };
+  }, [c.id, c.sent, c.delivered, c.replies, c.failed, c.unsubscribed]);
 
   useEffect(() => {
     const prev = prevRef.current;
     const lines: StreamEvent[] = [];
-    const h = hashId(c.id);
-    const pick = (k: number) => contacts[(h + k * 7 + c.delivered) % contacts.length];
+    const pickByStatus = (statuses: RowStatus[], offset = 0) => {
+      const pool = recipients.filter((row) => statuses.includes(row.status));
+      if (pool.length === 0) return recipients[Math.max(0, recipients.length - 1 - offset)];
+      return pool[Math.max(0, pool.length - 1 - offset)];
+    };
     const dDel = c.delivered - prev.delivered;
     const dRep = c.replies - prev.replies;
     const dFail = c.failed - prev.failed;
     const dUnsub = c.unsubscribed - prev.unsub;
     if (dDel > 0) {
-      const contact = pick(dDel);
-      lines.push({ id: `${c.id}_e${Date.now()}_d`, at: Date.now(), kind: "delivered", text: `livré à ${contact.name}` });
+      const contact = pickByStatus(["delivered", "replied", "unsub"], dDel - 1);
+      if (contact) lines.push({ id: `${c.id}_e${Date.now()}_d`, at: Date.now(), kind: "delivered", text: `livré à ${contact.name}` });
     }
     if (dRep > 0) {
-      const contact = pick(dRep + 3);
-      lines.push({
+      const contact = pickByStatus(["replied"], dRep - 1);
+      if (contact) lines.push({
         id: `${c.id}_e${Date.now()}_r`, at: Date.now(), kind: "reply",
-        text: `réponse de ${contact.name.split(" ")[0]} : « ${REPLY_POOL[(h + c.replies) % REPLY_POOL.length]} »`,
+        text: `réponse reçue de ${contact.name.split(" ")[0]}`,
       });
-      if (c.stopOnReply) {
+      if (contact && c.stopOnReply) {
         lines.push({
           id: `${c.id}_e${Date.now()}_x`, at: Date.now(), kind: "excluded",
           text: `${contact.name} exclue après réponse (arrêt auto activé)`,
         });
       }
-      if (Date.now() - lastReplyToastRef.current > 8000) {
+      if (contact && Date.now() - lastReplyToastRef.current > 8000) {
         lastReplyToastRef.current = Date.now();
         toast.info("Nouvelle réponse à la campagne", { description: `${contact.name} — conversation marquée dans l'Inbox` });
       }
     }
     if (dFail > 0) {
-      const contact = pick(dFail + 11);
-      lines.push({
+      const contact = pickByStatus(["failed"], dFail - 1);
+      if (contact) lines.push({
         id: `${c.id}_e${Date.now()}_f`, at: Date.now(), kind: "failed",
-        text: `échec ${contact.phone.slice(0, 8)} •• •• ${contact.phone.slice(-2)} (numéro indisponible)`,
+        text: `échec ${maskPhone(contact.phone)} (numéro indisponible)`,
       });
     }
     if (dUnsub > 0) {
-      lines.push({
+      const contact = pickByStatus(["unsub"], dUnsub - 1);
+      if (contact) lines.push({
         id: `${c.id}_e${Date.now()}_u`, at: Date.now(), kind: "unsub",
-        text: `STOP reçu de ${pick(5).name} — désinscrit et ajouté à la liste d'exclusion`,
+        text: `STOP reçu de ${contact.name} — désinscrit et ajouté à la liste d'exclusion`,
       });
     }
     if (lines.length) setEvents((ev) => [...lines.reverse(), ...ev].slice(0, 50));
     prevRef.current = { sent: c.sent, delivered: c.delivered, replies: c.replies, failed: c.failed, unsub: c.unsubscribed };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [c.sent, c.delivered, c.replies, c.failed, c.unsubscribed]);
+  }, [c.id, c.sent, c.delivered, c.replies, c.failed, c.unsubscribed, c.stopOnReply, recipients]);
 
   /* auto-scroll : pause si l'utilisateur scrolle */
   const logRef = useRef<HTMLDivElement>(null);
@@ -347,8 +337,8 @@ export default function CampaignTracking({
   );
 
   const mainSession = sessions[0];
-  const sessionDown = mainSession.status === "disconnected";
-  const sessionUnstable = mainSession.status === "unstable";
+  const sessionDown = mainSession?.status === "disconnected";
+  const sessionUnstable = mainSession?.status === "unstable";
 
   if (loading) {
     return (

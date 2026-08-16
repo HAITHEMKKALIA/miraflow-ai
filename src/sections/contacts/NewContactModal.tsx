@@ -63,7 +63,7 @@ export default function NewContactModal({ open, onClose, onCreate }: NewContactM
       tags,
       score: 12,
       stage: "prospect",
-      consent: false,
+      consent: true,
       lastContactAt: Date.now(),
     };
     onCreate(contact);

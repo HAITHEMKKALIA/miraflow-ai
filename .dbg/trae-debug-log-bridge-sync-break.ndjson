@@ -1,0 +1,3 @@
+
+{"sessionId": "bridge-sync-break", "runId": "pre-fix", "hypothesisId": "B", "location": "src/pages/Campaigns.tsx:onLaunch", "msg": "[DEBUG] campaign launch requested", "data": {"name": "Sondage satisfaction (Relance IA)", "eligible": 1, "segments": ["seg_clients", "seg_all"], "manualIds": [], "sendMode": "now", "needsReview": false, "sessionCount": 1, "connectedSessions": ["s_main"]}, "ts": 1786063963580}
+{"sessionId": "bridge-sync-break", "runId": "pre-fix", "hypothesisId": "B", "location": "src/pages/Campaigns.tsx:onLaunch", "msg": "[DEBUG] campaign created locally", "data": {"campaignId": "cp_local_msi8dadh", "status": "running", "total": 1, "local": true, "hasBridgeDispatch": false}, "ts": 1786063963589}

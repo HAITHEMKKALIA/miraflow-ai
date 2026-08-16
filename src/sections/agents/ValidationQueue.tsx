@@ -37,7 +37,7 @@ function SuggestionRow({ suggestion }: { suggestion: AiSuggestion }) {
   const [motif, setMotif] = useState("");
 
   const agent = agents.find((a) => a.id === suggestion.agentId);
-  const meta = agent ? AGENT_META[agent.id] : null;
+  const meta = agent ? (AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"]) : null;
   const styles = meta ? COLOR_STYLES[meta.color] : null;
   const conv = conversations.find((c) => c.id === suggestion.conversationId);
   const contact = contacts.find((c) => c.id === conv?.contactId);

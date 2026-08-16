@@ -15,11 +15,11 @@ export interface RichTenant extends Omit<Tenant, "status"> {
 }
 
 export const PLATFORM = {
-  mrr: 12500,
-  clients: 142,
-  trials: 28,
-  sessionsUp: 185,
-  sessionsTotal: 200,
+  mrr: 0,
+  clients: 0,
+  trials: 0,
+  sessionsUp: 0,
+  sessionsTotal: 0,
 };
 
 export const PLAN_META: Record<PlanId, { label: string }> = {

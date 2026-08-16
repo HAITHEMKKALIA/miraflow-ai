@@ -19,9 +19,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Contact } from "@/lib/sim/store";
-import { useContacts } from "@/lib/sim/store";
+import { useContacts, useSessions } from "@/lib/sim/store";
 import { ConfirmDialog, PhoneMock, PhoneStatusBar, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
+import { mergeContacts, useCrm } from "@/sections/contacts/crmStore";
 import type { CampaignGoal, CarouselCard, CarouselMode, Persona } from "./shared";
 import {
   GOAL_META, PERSONAS, PRODUCT_IMAGES, REVIEW_THRESHOLD, TIMEZONES, VARIABLES,
@@ -63,6 +64,7 @@ export interface WizardState {
   windowStart: number;
   windowEnd: number;
   spread: boolean;
+  selectedSessionId: string;
 }
 
 export const INITIAL_WIZARD: WizardState = {
@@ -97,6 +99,7 @@ export const INITIAL_WIZARD: WizardState = {
   windowStart: 8,
   windowEnd: 21,
   spread: false,
+  selectedSessionId: "",
 };
 
 export const SEED_CONTENT = INITIAL_WIZARD.content;
@@ -313,7 +316,14 @@ function MiniDonut({ eligible }: { eligible: Contact[] }) {
 }
 
 export function StepAudience({ s, patch, eligibleCount }: { s: WizardState; patch: Patch; eligibleCount: (ids: Contact[]) => void }) {
-  const contacts = useContacts();
+  const baseContacts = useContacts();
+  const overrides = useCrm((state) => state.overrides);
+  const extra = useCrm((state) => state.extra);
+  const deleted = useCrm((state) => state.deleted);
+  const contacts = useMemo(
+    () => mergeContacts(baseContacts, { overrides, extra, deleted }),
+    [baseContacts, overrides, extra, deleted],
+  );
   const segments = useMemo(() => buildSegments(contacts), [contacts]);
   const [query, setQuery] = useState("");
 
@@ -1450,6 +1460,21 @@ export function StepSchedule({
   onLaunch: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const sessions = useSessions();
+  const connectedSessions = useMemo(
+    () => sessions.filter((item) => item.status === "connected"),
+    [sessions],
+  );
+  const selectedSession = connectedSessions.find((item) => item.id === s.selectedSessionId);
+
+  useEffect(() => {
+    if (selectedSession) return;
+    if (connectedSessions.length === 0) {
+      if (s.selectedSessionId) patch({ selectedSessionId: "" });
+      return;
+    }
+    patch({ selectedSessionId: connectedSessions[0].id });
+  }, [connectedSessions, patch, s.selectedSessionId, selectedSession]);
 
   const conversion = useMemo(() => {
     if (s.sendMode !== "later" || !s.date) return null;
@@ -1469,7 +1494,7 @@ export function StepSchedule({
     return timeHM(base + minutes * 60_000);
   }, [eligible, s.rate, s.sendMode, s.date, s.time]);
 
-  const ready = s.sendMode !== "later" || (!!s.date && !!s.time);
+  const ready = (s.sendMode !== "later" || (!!s.date && !!s.time)) && !!selectedSession;
   const needsReview = eligible > REVIEW_THRESHOLD;
 
   return (
@@ -1566,6 +1591,54 @@ export function StepSchedule({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <div className="mt-5 rounded-r-md border border-line bg-surface-1 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[14px] font-semibold text-hi">Session WhatsApp à utiliser</p>
+            <p className="mt-0.5 text-[12px] text-low">
+              Choisissez la session réelle qui doit porter cette campagne.
+            </p>
+          </div>
+          <BadgeCheck className="size-5 shrink-0 text-iris" />
+        </div>
+
+        {connectedSessions.length === 0 ? (
+          <div className="mt-3 flex items-start gap-2.5 rounded-r-md border border-amber/40 bg-amber/10 p-3.5 text-[12px] text-amber">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <p>Aucune session WhatsApp connectée. Reconnecte une session QR avant de lancer ou planifier une campagne réelle.</p>
+          </div>
+        ) : (
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {connectedSessions.map((session) => {
+              const active = s.selectedSessionId === session.id;
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => patch({ selectedSessionId: session.id })}
+                  className={cn(
+                    "rounded-r-md border p-4 text-start transition-all duration-200",
+                    active ? "border-iris/60 bg-iris/[.07] shadow-card" : "border-line bg-surface-2 hover:border-line-strong",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[14px] font-semibold text-hi">{session.name}</div>
+                      <div className="mt-1 text-[12px] text-mid">{session.phone || "Numéro non remonté"}</div>
+                    </div>
+                    {active ? <Check className="size-4 text-iris" /> : null}
+                  </div>
+                  <div className="mt-2 flex items-center gap-2 text-[11px] text-low">
+                    <span className="rounded-full bg-mint/12 px-2 py-0.5 text-mint">Connectée</span>
+                    <span>{session.latencyMs} ms</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Cadence */}
       <div className="mt-5 grid gap-4 rounded-r-md border border-line bg-surface-1 p-4 md:grid-cols-2">
@@ -1727,6 +1800,7 @@ export function StepSchedule({
                     ? `${new Date(`${s.date}T${s.time || "09:00"}`).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ${s.tz}`
                     : "À définir",
             },
+            { k: "Session", v: selectedSession ? `${selectedSession.name}${selectedSession.phone ? ` · ${selectedSession.phone}` : ""}` : "Aucune session connectée" },
           ].map((row) => (
             <motion.div
               key={row.k}
@@ -1776,7 +1850,7 @@ export function StepSchedule({
           </button>
           {!ready && (
             <p className="flex items-center gap-1.5 text-[12px] text-amber">
-              <Clock className="size-3.5" /> Choisissez une date et une heure pour planifier.
+              <Clock className="size-3.5" /> {!selectedSession ? "Choisissez une session WhatsApp connectée." : "Choisissez une date et une heure pour planifier."}
             </p>
           )}
         </div>
@@ -1790,6 +1864,7 @@ export function StepSchedule({
         description={
           <span className="block space-y-1.5">
             <span className="block">{fmt(eligible)} messages · {s.rate} msg/min · fenêtre {String(s.windowStart).padStart(2, "0")}:00–{String(s.windowEnd).padStart(2, "0")}:00</span>
+            <span className="block">Session choisie : <span className="font-medium text-hi">{selectedSession?.name ?? "Aucune"}</span></span>
             {needsReview && (
               <span className="block font-medium text-amber">
                 Audience &gt; {fmt(REVIEW_THRESHOLD)} contacts — validation à quatre yeux : aucun message ne partira
