@@ -31,7 +31,7 @@ export default function DashboardHeader({
   const me = useSim((s) => s.team[0]);
   const hour = new Date().getHours();
   const greeting = hour >= 18 || hour < 5 ? "Bonsoir" : "Bonjour";
-  const firstName = me?.name.split(" ")[0] ?? "Amira";
+  const firstName = me?.name.split(" ")[0] ?? "";
   const date = new Intl.DateTimeFormat("fr-FR", {
     weekday: "long",
     day: "numeric",
@@ -47,7 +47,7 @@ export default function DashboardHeader({
         transition={{ duration: 0.45, ease: EASE }}
       >
         <h1 className="font-display text-[32px] leading-[38px] font-semibold tracking-[-0.03em] text-hi">
-          {greeting}, <span className="text-gradient">{firstName}</span>
+          {greeting}{firstName ? <> <span className="text-gradient">{firstName}</span></> : ""}
         </h1>
         <p className="mt-1 text-[14px] text-mid">
           Voici le pouls de vos conversations — <span className="text-low">{date}</span>

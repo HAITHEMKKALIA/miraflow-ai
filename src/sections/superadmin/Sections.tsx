@@ -5,7 +5,7 @@ const Section = ({ title, subtitle }: { title: string; subtitle?: string }) => (
   <div className="p-6 border border-line rounded-lg bg-surface-1 mb-4">
     <h3 className="font-bold mb-2">{title}</h3>
     <div className="h-20 bg-surface-2 rounded flex items-center justify-center px-4 text-center text-low italic">
-      {subtitle ?? `Composant ${title} simulé`}
+      {subtitle ?? `Aucune donnée ${title} pour le moment`}
     </div>
   </div>
 );
