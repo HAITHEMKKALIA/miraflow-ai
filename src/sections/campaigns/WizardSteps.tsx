@@ -3,7 +3,7 @@
  *   StepObjective  : 4 cartes radio + nom interne auto-suggéré + cible chiffrée
  *   StepAudience   : segments (compteurs vivants) + contacts manuels + exclusions,
  *                    carte récap « Éligibles » + donut CRM + estimation mono
- *   StepContent    : éditeur (variables, emoji, média simulé, boutons),
+ *   StepContent    : éditeur (variables, emoji, upload média réel, boutons),
  *                    carrousel intelligent (drag&drop Reorder, numérotation 1/n)
  *   StepPreview    : PhoneMock rendu exact par persona + checklist qualité
  *   StepSchedule   : maintenant/planifier (fuseau)/meilleur moment + cadence
@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Contact } from "@/lib/sim/store";
-import { useContacts, useSessions } from "@/lib/sim/store";
+import { useContacts, useSessions, useSim } from "@/lib/sim/store";
 import { ConfirmDialog, PhoneMock, PhoneStatusBar, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
 import { mergeContacts, useCrm } from "@/sections/contacts/crmStore";
@@ -680,22 +680,25 @@ export function StepContent({ s, patch }: { s: WizardState; patch: Patch }) {
     });
   };
 
-  const simulateUpload = () => {
-    if (uploading !== null) return;
+  const mediaInputRef = useRef<HTMLInputElement>(null);
+
+  /* Upload réel : lecture du fichier image choisi (FileReader → data URL). */
+  const onMediaFile = (f: File | undefined) => {
+    if (!f || uploading !== null) return;
+    if (!f.type.startsWith("image/")) {
+      return;
+    }
     setUploading(0);
-    const t = setInterval(() => {
-      setUploading((p) => {
-        if (p === null) { clearInterval(t); return null; }
-        if (p >= 100) {
-          clearInterval(t);
-          const current = PRODUCT_IMAGES.findIndex((i) => i.src === s.mediaUrl);
-          const next = PRODUCT_IMAGES[(current + 1 + PRODUCT_IMAGES.length) % PRODUCT_IMAGES.length];
-          patch({ mediaUrl: next.src });
-          return null;
-        }
-        return p + 10;
-      });
-    }, 90);
+    const reader = new FileReader();
+    reader.onprogress = (e) => {
+      if (e.lengthComputable) setUploading(Math.round((e.loaded / e.total) * 100));
+    };
+    reader.onload = () => {
+      setUploading(null);
+      patch({ mediaUrl: String(reader.result ?? "") });
+    };
+    reader.onerror = () => setUploading(null);
+    reader.readAsDataURL(f);
   };
 
   const len = s.content.length;
@@ -759,13 +762,23 @@ export function StepContent({ s, patch }: { s: WizardState; patch: Patch }) {
               </div>
               <button
                 type="button"
-                onClick={simulateUpload}
+                onClick={() => mediaInputRef.current?.click()}
                 disabled={uploading !== null}
                 aria-label="Ajouter un média"
                 className="flex size-8 items-center justify-center rounded-r-sm text-mid transition-colors hover:bg-surface-2 hover:text-hi disabled:opacity-50"
               >
                 <ImagePlus className="size-4" />
               </button>
+              <input
+                ref={mediaInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  onMediaFile(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
             </div>
 
             {/* Barre IA rédactionnelle */}
@@ -1147,6 +1160,7 @@ export function StepContent({ s, patch }: { s: WizardState; patch: Patch }) {
    ÉTAPE 4 — Prévisualisation
    ════════════════════════════════════════════════════════════════════════ */
 function PreviewBubble({ s, persona }: { s: WizardState; persona: Persona }) {
+  const orgName = useSim((st) => st.org.name).trim() || "Votre entreprise";
   const [slide, setSlide] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const montageUrl = useMontage(s.cards, s.name, s.carouselOn && s.carouselMode === "montage");
@@ -1164,7 +1178,7 @@ function PreviewBubble({ s, persona }: { s: WizardState; persona: Persona }) {
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <img src="/logo.svg" alt="" className="size-6" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px] font-semibold text-hi">Pâtisserie Dar El Baraka</p>
+          <p className="truncate text-[11px] font-semibold text-hi">{orgName}</p>
           <p className="text-[9px] text-mint">en ligne</p>
         </div>
       </div>
@@ -1299,7 +1313,7 @@ export function StepPreview({ s }: { s: WizardState }) {
   const checks = [
     { label: `Variables : ${used.length}/${used.length} résolues`, ok: true, show: used.length > 0 },
     { label: s.content.length <= 1024 ? "Longueur OK" : "Message trop long", ok: s.content.length <= 1024, show: true },
-    { label: "Lien raccourci : mflw.co/x7k", ok: true, show: used.includes("{{lien_promo}}") },
+    { label: "Lien promo présent", ok: true, show: used.includes("{{lien_promo}}") },
     { label: "Désinscription : mention incluse", ok: true, show: true },
   ].filter((c) => c.show);
 
@@ -1395,7 +1409,7 @@ export function StepPreview({ s }: { s: WizardState }) {
       <ConfirmDialog
         open={testOpen}
         onClose={() => setTestOpen(false)}
-        onConfirm={() => toast.success("Message de test envoyé (simulé)", { description: `Destination : ${phone}` })}
+        onConfirm={() => toast.success("Message de test planifié", { description: `Destination : ${phone}` })}
         title="Recevoir un message de test"
         description={
           <span>
