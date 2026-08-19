@@ -1,6 +1,6 @@
 /**
  * S5 — Chat de test IA (panneau central). Colonne gauche : sélecteur d'agent
- * (orbe radio), seuil, toggles sources / mode suggestion, persona simulée.
+ * (orbe radio), seuil, toggles sources / mode suggestion, contexte client.
  * Zone de chat : indicateur « l'agent réfléchit… » contextuel, frappe
  * progressive 22 car/s, badge confiance (anneau animé), sources cliquables
  * (popover avec extrait + version), bandeau amber si confiance < seuil,
@@ -13,9 +13,11 @@ import { toast } from "sonner";
 import { useAgents, useSim } from "@/lib/sim/store";
 import { cn } from "@/lib/utils";
 import {
-  AGENT_META, COLOR_STYLES, EXTRA_AGENTS, PERSONAS, craftAnswer, pickQuestions, uid,
+  AGENT_META, COLOR_STYLES, PERSONAS, pickQuestions, uid,
   type ChatMessage as Msg, type ChatSource, type Persona,
 } from "./data";
+import { chatCompletion, resolveAgentEngine } from "@/lib/ai";
+import { DERJA_SYSTEM_PROMPT, DERJA_REPLY_RULE } from "@/lib/derja";
 import { ConfidenceRing, SectionHead, ThresholdSlider, Toggle } from "./controls";
 import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
@@ -179,7 +181,7 @@ function AgentBubble({
 export default function TestChat() {
   const storeAgents = useAgents();
   /* 6 agents du SimEngine + 2 agents locaux (Traduction, Analyse d'images) */
-  const agents = useMemo(() => [...storeAgents, ...EXTRA_AGENTS], [storeAgents]);
+  const agents = storeAgents;
   const { chatAgentId, setChatAgentId, threshold, setThreshold, docs, chatRef, pushJournal, modes } = useAgentsPage();
   const [persona, setPersona] = useState<Persona>("vip");
   const [showSources, setShowSources] = useState(true);
@@ -192,14 +194,14 @@ export default function TestChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const agent = agents.find((a) => a.id === chatAgentId) ?? agents[0];
-  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"];
+  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_support"];
   const hasDocs = docs.length > 0;
 
   /* Reset quand l'agent change : message d'accueil */
   useEffect(() => {
     const timeout = setTimeout(() => {
       setMessages([
-        { id: uid("m"), from: "agent", text: (AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"]).greeting },
+        { id: uid("m"), from: "agent", text: (AGENT_META[agent.key || agent.id] || AGENT_META["ag_support"]).greeting },
       ]);
       setThinking(null);
     }, 0);
@@ -240,25 +242,54 @@ export default function TestChat() {
     const thinkText = meta.thinking[answerCount % meta.thinking.length];
     setThinking(thinkText);
 
-    timers.current.push(
-      setTimeout(() => {
-        setThinking(null);
-        const answer = craftAnswer(agent.id, q, persona, hasDocs);
-        const msg: LocalMsg = { id: uid("m"), from: "agent", text: answer.text, confidence: answer.confidence, sources: answer.sources, shown: 0, typing: true };
-        setMessages((ms) => [...ms, msg]);
-        setAnswerCount((c) => c + 1);
-        typeOut(msg);
-        pushJournal({
-          agentId: agent.id,
-          agentName: agent.name,
-          conversation: PERSONAS.find((p) => p.id === persona)?.label ?? "Test",
-          action: (modes[agent.id] ?? agent.mode) === "autonomous" ? "Réponse auto" : "Suggestion",
-          confidence: answer.confidence,
-          decision: "—",
-          latencyS: Math.round((0.9 + Math.random() * 1.3) * 10) / 10,
-        });
-      }, 800),
-    );
+    /* Réponse RÉELLE via le fournisseur LLM configuré (Réglages → IA).
+     * En cas d'échec : message honnête « IA indisponible », jamais de
+     * fausse réponse. */
+    const started = Date.now();
+    const personaLabel = PERSONAS.find((p) => p.id === persona)?.label ?? "";
+    void (async () => {
+      /* Moteur effectif de l'agent testé (provider/model par agent, sinon global). */
+      const engine = resolveAgentEngine(agent);
+      const res = await chatCompletion({
+        messages: [
+          {
+            role: "system",
+            content:
+              (agent.systemPrompt ??
+                `Tu es l'agent ${agent.name} de MiraFlow AI. Réponds dans la langue du client, de façon concise et professionnelle.`)
+              + (personaLabel ? `\nContexte du test : le client est « ${personaLabel} ».` : "")
+              + (hasDocs ? "\nAppuie-toi sur la base de connaissances de l'organisation." : "")
+              + `\n\n${DERJA_SYSTEM_PROMPT}\n\n${DERJA_REPLY_RULE}`,
+          },
+          { role: "user", content: q },
+        ],
+        provider: agent.provider ?? "default",
+        ...(engine.overridden ? { model: engine.model } : {}),
+        temperature: agent.temperature ?? 0.2,
+      });
+      const latencyS = Math.round(((Date.now() - started) / 1000) * 10) / 10;
+      setThinking(null);
+      const ollamaUrl = (useSim.getState().aiSettings.ollamaBaseUrl || "http://localhost:11434").replace(/\/+$/, "");
+      const text = res.ok && res.text.trim()
+        ? res.text.trim()
+        : !res.ok && engine.provider === "ollama"
+          ? `Ollama injoignable sur ${ollamaUrl} — vérifiez que le serveur local tourne (ollama serve) et que le modèle ${engine.model} est installé. Détail : ${res.error}`
+          : "IA indisponible : configurez un fournisseur LLM (Réglages → IA) puis réessayez. Aucune réponse automatique n'a été fabriquée.";
+      const confidence = res.ok ? 100 : 0;
+      const msg: LocalMsg = { id: uid("m"), from: "agent", text, confidence, sources: [], shown: 0, typing: true };
+      setMessages((ms) => [...ms, msg]);
+      setAnswerCount((c) => c + 1);
+      typeOut(msg);
+      pushJournal({
+        agentId: agent.id,
+        agentName: agent.name,
+        conversation: personaLabel || "Test",
+        action: (modes[agent.id] ?? agent.mode) === "autonomous" ? "Réponse auto" : "Suggestion",
+        confidence,
+        decision: "—",
+        latencyS,
+      });
+    })();
   };
 
   const onFeedback = (id: string, f: "up" | "down") => {
@@ -268,13 +299,14 @@ export default function TestChat() {
 
   const onTransfer = () => {
     if (messages.some((m) => m.from === "system")) return;
+    const owner = useSim.getState().team[0]?.name?.trim() || "un humain";
     setMessages((ms) => [
       ...ms,
-      { id: uid("m"), from: "system", text: "Conversation transférée à Ines Kacem — un humain prend le relais dans l'Inbox." },
+      { id: uid("m"), from: "system", text: `Conversation transférée à ${owner} — un humain prend le relais dans l'Inbox.` },
     ]);
     useSim.setState((s) => ({
       notifications: [
-        { id: uid("nt"), at: Date.now(), kind: "ai" as const, title: "Transfert à un humain", body: `Le chat de test de l'agent ${agent.name} a été transféré à Ines Kacem.`, read: false },
+        { id: uid("nt"), at: Date.now(), kind: "ai" as const, title: "Transfert à un humain", body: `Le chat de test de l'agent ${agent.name} a été transféré à ${owner}.`, read: false },
         ...s.notifications,
       ].slice(0, 30),
     }));
@@ -291,7 +323,7 @@ export default function TestChat() {
 
   return (
     <section ref={chatRef} className="scroll-mt-24">
-      <SectionHead title="Chat de test" counter="réponses simulées en local · aucune donnée envoyée" />
+      <SectionHead title="Chat de test" counter="réponses du LLM configuré · rien envoyé sur WhatsApp" />
 
       <div className="grid gap-0 overflow-hidden rounded-r-lg border border-line bg-surface-1 lg:grid-cols-[300px_1fr]">
         {/* ── Colonne réglages ── */}
@@ -299,7 +331,7 @@ export default function TestChat() {
           <p className="label-micro mb-3 text-low">Agent à tester</p>
           <div className="space-y-1.5" role="radiogroup" aria-label="Agent à tester">
             {agents.map((a) => {
-              const m = AGENT_META[a.key || a.id] || AGENT_META["ag_analyst"];
+              const m = AGENT_META[a.key || a.id] || AGENT_META["ag_support"];
               const st = COLOR_STYLES[m.color];
               const selected = a.id === agent.id;
               return (
@@ -343,7 +375,7 @@ export default function TestChat() {
 
             {/* Persona */}
             <div className="relative">
-              <p className="label-micro mb-2 text-low">Contexte simulé</p>
+              <p className="label-micro mb-2 text-low">Contexte client</p>
               <button
                 type="button"
                 onClick={() => setPersonaOpen((o) => !o)}

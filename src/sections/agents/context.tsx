@@ -11,9 +11,9 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { useSim, useAgents } from "@/lib/sim/store";
-import type { AgentMode, AiSuggestion } from "@/lib/sim/store";
+import type { AgentMode } from "@/lib/sim/store";
 import {
-  EXTRA_AGENTS, SEED_DOCS, SEED_SUGGESTION_TEXTS, UPLOAD_POOL,
+  SEED_DOCS,
   seedJournal, uid,
   type AgentConfig, type AgentsPageCtx, type JournalEntry, type KnowledgeDoc,
 } from "./data";
@@ -21,31 +21,30 @@ import { Ctx } from "./context-object";
 
 /* ── Configuration par agent (drawer S3) ───────────────────────────────── */
 function defaultConfigs(): Record<string, AgentConfig> {
-  const mk = (name: string, docIds: string[]): AgentConfig => ({
+  const mk = (name: string): AgentConfig => ({
     name,
     tone: "Chaleureux",
     langs: ["FR", "AR"],
-    signature: "— L'équipe Dar El Baraka",
+    signature: "",
     threshold: 85,
     activeFrom: "08:00",
     activeTo: "20:00",
     maxMessages: 6,
-    forbidden: ["gratuit à vie", "garantie 100 %"],
-    docIds,
+    forbidden: [],
+    docIds: [],
     escalationKeywords: ["réclamation", "avocat", "remboursement"],
     escalateOnNegative: true,
     escalateAfterExchanges: true,
-    escalateTo: "u_karim",
+    escalateTo: "u_owner",
   });
   return {
-    ag_sales: mk("Commercial", ["doc_catalogue", "doc_tarifs", "doc_scripts"]),
-    ag_support: mk("Support", ["doc_faq", "doc_horaires", "doc_garantie"]),
-    ag_tech: mk("Technique", ["doc_garantie", "doc_tailles"]),
-    ag_rdv: mk("Rendez-vous", ["doc_horaires"]),
-    ag_supervisor: mk("Superviseur", ["doc_privacy", "doc_scripts"]),
-    ag_analyst: mk("Analyste", ["doc_tarifs"]),
-    ag_translate: { ...mk("Traduction", ["doc_faq", "doc_horaires"]), langs: ["FR", "AR", "EN"] },
-    ag_vision: mk("Analyse d'images", ["doc_catalogue", "doc_tarifs"]),
+    ag_router: mk("Router"),
+    ag_sales: mk("Commercial"),
+    ag_sav: mk("SAV"),
+    ag_delivery: mk("Livraison"),
+    ag_support: mk("Support"),
+    ag_payment: mk("Paiement"),
+    ag_supervisor: mk("Superviseur"),
   };
 }
 
@@ -65,7 +64,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
 
   const nameOf = useCallback(
     (agentId: string) =>
-      agents.find((a) => a.id === agentId)?.name ?? EXTRA_AGENTS.find((a) => a.id === agentId)?.name ?? "Agent",
+      agents.find((a) => a.id === agentId)?.name ?? "Agent",
     [agents],
   );
 
@@ -98,16 +97,20 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
 
   /* Base de connaissances */
   const [docs, setDocs] = useState<KnowledgeDoc[]>(SEED_DOCS);
-  const uploadIdx = useRef(0);
 
-  const addDoc = useCallback(() => {
-    const spec = UPLOAD_POOL[uploadIdx.current % UPLOAD_POOL.length];
-    uploadIdx.current += 1;
+  /* Ajout réel : le fichier choisi par l'utilisateur (nom/taille réels). */
+  const addDoc = useCallback((file?: File) => {
+    if (!file) return;
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const kind: KnowledgeDoc["kind"] = ext === "pdf" ? "pdf" : ext === "docx" || ext === "doc" ? "docx" : ext === "txt" || ext === "md" ? "txt" : "txt";
+    const size = file.size >= 1_048_576
+      ? `${(file.size / 1_048_576).toFixed(1).replace(".", ",")} Mo`
+      : `${Math.max(1, Math.round(file.size / 1024))} Ko`;
     const doc: KnowledgeDoc = {
       id: uid("doc"),
-      name: spec.name,
-      kind: spec.kind,
-      size: spec.size,
+      name: file.name,
+      kind,
+      size,
       fragments: 0,
       status: "indexing",
       step: 0,
@@ -117,7 +120,7 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
       version: "v1.0",
     };
     setDocs((d) => [doc, ...d]);
-    toast(`« ${spec.name} » téléversé`, { description: "Indexation en cours…" });
+    toast(`« ${file.name} » téléversé`, { description: "Indexation en cours…" });
   }, []);
 
   const removeDoc = useCallback((id: string) => {
@@ -149,12 +152,10 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
         if (!d.some((x) => x.status === "indexing")) return d;
         return d.map((x) => {
           if (x.status !== "indexing") return x;
-          const progress = x.progress + 14 + Math.floor(Math.random() * 16);
+          const progress = x.progress + 22;
           if (progress < 100) return { ...x, progress };
           if (x.step < 3) return { ...x, step: x.step + 1, progress: 0 };
-          const target = UPLOAD_POOL.find((p) => p.name === x.name)?.fragments ?? x.fragments;
-          const fragments = x.fragments > 0 ? x.fragments : target;
-          return { ...x, status: "indexed" as const, progress: 100, fragments: Math.max(fragments, 24) };
+          return { ...x, status: "indexed" as const, progress: 100, fragments: Math.max(x.fragments, 1) };
         });
       });
     }, 420);
@@ -225,24 +226,6 @@ export function AgentsProvider({ children }: { children: ReactNode }) {
   const pushJournal = useCallback((e: Omit<JournalEntry, "id" | "at">) => {
     pushGlobalJournal(e);
   }, [pushGlobalJournal]);
-
-  /* Seed : 3 suggestions en attente si la file est vide (design §S1/S6) */
-  useEffect(() => {
-    const st = useSim.getState();
-    if (st.suggestions.length > 0) return;
-    const open = st.conversations.filter((c) => c.status === "open" || c.status === "new");
-    if (open.length < 3) return;
-    const seeds: AiSuggestion[] = SEED_SUGGESTION_TEXTS.map((text, i) => ({
-      id: uid("sg"),
-      agentId: ["ag_sales", "ag_support", "ag_sales"][i],
-      conversationId: open[i].id,
-      text,
-      confidence: [92, 88, 85][i],
-      at: Date.now() - (6 + i * 4) * 60_000,
-      status: "pending" as const,
-    }));
-    useSim.setState((s) => ({ suggestions: [...seeds, ...s.suggestions] }));
-  }, []);
 
   /* Nouvelle suggestion SimEngine → entrée de journal « En attente » */
   const pendingIds = useSim((s) => s.suggestions.map((x) => (x.status === "pending" ? x.id : "")).join("|"));
