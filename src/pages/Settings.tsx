@@ -15,6 +15,7 @@ import SettingsNav from "@/sections/settings/SettingsNav";
 import GeneralTab from "@/sections/settings/GeneralTab";
 import TeamTab from "@/sections/settings/TeamTab";
 import SessionsTab from "@/sections/settings/SessionsTab";
+import AiTab from "@/sections/settings/AiTab";
 import BillingTab from "@/sections/settings/BillingTab";
 import SecurityTab from "@/sections/settings/SecurityTab";
 import NotificationsTab from "@/sections/settings/NotificationsTab";
@@ -24,6 +25,7 @@ const TAB_CONTENT: Record<TabId, ComponentType<any>> = {
   general: GeneralTab,
   equipe: TeamTab,
   sessions: SessionsTab,
+  ia: AiTab,
   plan: BillingTab,
   securite: SecurityTab,
   notifications: NotificationsTab,

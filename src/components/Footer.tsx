@@ -2,7 +2,7 @@
  * Footer — pied de page marketing (design.md §6 / home.md S10).
  * 4 colonnes (Produit / Ressources / Entreprise / Légal), newsletter,
  * sélecteur langue + toggle thème, puis barre légale avec le disclaimer
- * WhatsApp/Meta + « Démonstration — données simulées ».
+ * WhatsApp/Meta.
  */
 import { Link } from "react-router";
 import { ArrowRight } from "lucide-react";
@@ -113,7 +113,7 @@ export default function Footer() {
         <div className="mt-14 border-t border-line pt-6">
           <p className="max-w-[72ch] text-[12px] leading-[18px] text-low">
             MiraFlow AI est un produit indépendant, non affilié, non autorisé et non approuvé par
-            WhatsApp ou Meta. Démonstration — données simulées.
+            WhatsApp ou Meta.
           </p>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[12px] text-low">
             <span>© 2025 MiraFlow AI. {t("nav.cta")} — 14 jours, sans carte bancaire.</span>
