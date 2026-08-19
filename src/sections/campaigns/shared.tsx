@@ -106,9 +106,9 @@ export function toStudio(c: Campaign): StudioCampaign {
 
 /* ── Personas de prévisualisation (campaigns.md Étape 4) ───────────────── */
 export const PERSONAS: Persona[] = [
-  { id: "p_yasmine", name: "Yasmine Gharbi", first: "Yasmine", last: "Gharbi", city: "Tunis", segment: "fidèle", product: "Coffret Aid" },
-  { id: "p_karim", name: "Karim Trabelsi", first: "Karim", last: "Trabelsi", city: "Sfax", segment: "intéressé", product: "Coffret découverte" },
-  { id: "p_lea", name: "Léa Moreau", first: "Léa", last: "Moreau", city: "Lyon", segment: "VIP", product: "Collection soie" },
+  { id: "p_fidele", name: "Contact fidèle", first: "Prénom", last: "Nom", city: "Ville", segment: "fidèle", product: "Produit" },
+  { id: "p_interesse", name: "Contact intéressé", first: "Prénom", last: "Nom", city: "Ville", segment: "intéressé", product: "Produit" },
+  { id: "p_vip", name: "Contact VIP", first: "Prénom", last: "Nom", city: "Ville", segment: "VIP", product: "Produit" },
 ];
 
 /* ── Variables de message ──────────────────────────────────────────────── */
@@ -120,7 +120,7 @@ export function resolveVar(token: string, p: Persona): string {
     case "{{nom}}": return p.last;
     case "{{ville}}": return p.city;
     case "{{produit}}": return p.product;
-    case "{{lien_promo}}": return "mflw.co/x7k";
+    case "{{lien_promo}}": return "https://votre-domaine.tld/promo";
     default: return token;
   }
 }
@@ -179,27 +179,6 @@ export function computeEligible(
   return arr;
 }
 
-/* ── RNG déterministe local (streams de suivi stables en démo) ─────────── */
-export function makeRng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-export function hashId(id: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
 /* ── Formatage ─────────────────────────────────────────────────────────── */
 export const fmt = (n: number) => n.toLocaleString("fr-FR");
 export const pct = (part: number, total: number) =>
@@ -223,16 +202,6 @@ export function ago(ts: number): string {
   return `il y a ${Math.round(h / 24)} j`;
 }
 
-/** Réponses réalistes pour le suivi (flux + table destinataires). */
-export const REPLY_POOL = [
-  "OUI je réserve",
-  "C'est dispo en boutique ?",
-  "Merci, je passe demain",
-  "On peut avoir 2 coffrets ?",
-  "Livraison à Sousse possible ?",
-  "Je réserve pour samedi",
-  "Super offre, merci !",
-];
 
 export const PRODUCT_IMAGES = [
   { src: "/product-pastry.png", label: "Pâtisseries" },

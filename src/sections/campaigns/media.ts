@@ -11,13 +11,14 @@
 import { useEffect, useState } from "react";
 import { jsPDF } from "jspdf";
 import type { CarouselCard } from "./shared";
+import { useSim } from "@/lib/sim/store";
 
 /* ── Constantes publiques ──────────────────────────────────────────────── */
 export const CATALOG_FILENAME = "Catalogue_Été.pdf";
 export const CATALOG_SIZE = "2,4 Mo";
 export const MONTAGE_FILENAME = "montage-campagne.jpg";
 
-const COMPANY = "Pâtisserie Dar El Baraka";
+const companyName = () => useSim.getState().org.name.trim() || "Votre entreprise";
 const IRIS = { r: 255, g: 90, b: 78 };
 const PULSE = { r: 255, g: 159, b: 46 };
 const INK = { r: 16, g: 22, b: 40 };
@@ -263,7 +264,7 @@ function pdfHeader(doc: jsPDF, W: number, label: string) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
   doc.setTextColor(255, 255, 255);
-  doc.text(COMPANY, 48, 38);
+  doc.text(companyName(), 48, 38);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(PULSE.r, PULSE.g, PULSE.b);
   doc.text(label, W - 48, 38, { align: "right" });
@@ -307,7 +308,7 @@ export async function generateCatalogPdf(opts: {
   doc.setFontSize(15);
   doc.text("MIRAFLOW AI · CATALOGUE", 56, 96);
   doc.setFontSize(40);
-  doc.text(COMPANY, 56, 150, { maxWidth: W - 112 });
+  doc.text(companyName(), 56, 150, { maxWidth: W - 112 });
   doc.setFontSize(22);
   doc.setTextColor(255, 238, 224);
   doc.text(opts.title.trim() || "Catalogue Été", 56, 190, { maxWidth: W - 112 });
@@ -391,12 +392,13 @@ export async function generateCatalogPdf(opts: {
   doc.text("Contact & commandes", 56, 120);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(13);
+  const org = useSim.getState().org;
+  const mainSession = useSim.getState().sessions[0];
   const contactLines = [
-    `${COMPANY}`,
-    `WhatsApp Business : +216 71 234 567`,
-    `E-mail : bonjour@darelbaraka.tn`,
-    `Adresse : 12 rue de la Kasbah, 1008 Tunis`,
-    `Horaires : lundi – samedi · 8 h 30 – 19 h 00`,
+    `${companyName()}`,
+    `WhatsApp Business : ${mainSession?.phone?.trim() || "session à connecter"}`,
+    org.city?.trim() ? `Adresse : ${org.city.trim()}` : "Adresse : à compléter dans les réglages",
+    `Horaires : à compléter dans les réglages`,
     ``,
     `Livraison offerte à Tunis dès 80 TND d'achat.`,
     `Paiement à la livraison ou par virement.`,
