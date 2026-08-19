@@ -3,6 +3,8 @@ import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useSim, type PlanId } from "@/lib/sim/store";
 import { tenantStartSession } from "@/lib/tenant";
+import { getAuthUser } from "@/lib/db";
+import { hydrateFromCloud, provisionCloudWorkspace } from "@/lib/cloud";
 
 const PLANS: { id: PlanId; label: string }[] = [
   { id: "starter", label: "Starter" },
@@ -34,17 +36,53 @@ export default function WizardScreen() {
     }
 
     setLoading(true);
+    void (async () => {
+      try {
+        // Si l'utilisateur est authentifié Supabase → création réelle en base
+        // (organization, membre owner, abonnement trial, session WhatsApp).
+        const user = await getAuthUser();
+        if (user) {
+          const res = await provisionCloudWorkspace({
+            orgName: cleanOrg,
+            plan,
+            userName: cleanUser,
+            sessionName: cleanSession,
+          });
+          if (res.error || !res.data) {
+            toast.error(`La création cloud a échoué (${res.error}). Espace local créé à la place.`);
+          } else {
+            // Hydrate le store depuis la base (org, session, agents, trial).
+            applyOnboarding({
+              orgName: res.data.org.name,
+              plan: (res.data.org.plan as PlanId) ?? plan,
+              userName: cleanUser,
+              sessionName: cleanSession,
+            });
+            const hydraError = await hydrateFromCloud();
+            if (hydraError) {
+              toast.warning("Espace créé, mais le rechargement des données a échoué : " + hydraError);
+            }
+            tenantStartSession(cleanOrg, cleanUser);
+            toast.success("Votre espace cloud est prêt (essai 14 jours).");
+            navigate("/app", { replace: true });
+            return;
+          }
+        }
 
-    applyOnboarding({
-      orgName: cleanOrg,
-      plan,
-      userName: cleanUser,
-      sessionName: cleanSession,
-    });
-
-    tenantStartSession(cleanOrg, cleanUser);
-    toast.success("Votre espace est pret.");
-    navigate("/app", { replace: true });
+        // Mode espace local (non authentifié) — comportement historique.
+        applyOnboarding({
+          orgName: cleanOrg,
+          plan,
+          userName: cleanUser,
+          sessionName: cleanSession,
+        });
+        tenantStartSession(cleanOrg, cleanUser);
+        toast.success("Votre espace est pret.");
+        navigate("/app", { replace: true });
+      } finally {
+        setLoading(false);
+      }
+    })();
   };
 
   return (

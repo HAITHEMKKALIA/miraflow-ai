@@ -2,7 +2,7 @@
  * AlertsBanner — bandeau d'alertes conditionnel (dashboard.md S2).
  * Max 2 alertes empilées + bandeaux de contexte :
  *   - Impersonnation (amber, persistant, croix interdite) — écrit par le Super
- *     Admin via localStorage "mf:impersonate" (démo cross-module).
+ *     Admin via localStorage "mf:impersonate" (console cross-module).
  *   - Incident plateforme (rose) — déclaré depuis /admin via "mf:incident".
  *   - Session déconnectée (amber) → action Reconnecter (modale QR).
  *   - Suggestions IA (iris) → action Examiner (Inbox filtré).

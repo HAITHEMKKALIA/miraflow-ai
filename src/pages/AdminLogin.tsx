@@ -26,7 +26,7 @@ export default function AdminLogin() {
     if (loading) return;
     setError(null);
     setLoading(true);
-    // latence simulée réaliste
+    // Vérification locale des identifiants propriétaire
     window.setTimeout(() => {
       if (ownerLogin(email, password)) {
         navigate("/admin", { replace: true });

@@ -9,8 +9,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { persistBridgeSession } from "@/lib/bridge";
 import {
-  usePendingSuggestions, useSessions, useSim, type QrSession, type SessionStatus,
+  sessionQuota, usePendingSuggestions, useSessions, useSim, type QrSession, type SessionStatus,
 } from "@/lib/sim/store";
+import QuotaReachedDialog from "@/components/app/QuotaReachedDialog";
 import DashboardHeader, { type Period } from "@/sections/dashboard/DashboardHeader";
 import AlertsBanner from "@/sections/dashboard/AlertsBanner";
 import KpiRow from "@/sections/dashboard/KpiRow";
@@ -21,6 +22,7 @@ import ActivityFeed from "@/sections/dashboard/ActivityFeed";
 import AiBanner from "@/sections/dashboard/AiBanner";
 import QrModal from "@/sections/dashboard/QrModal";
 import type { BridgeConnectedInfo } from "@/components/BridgeQrPanel";
+import CloudGate from "@/components/app/CloudGate";
 
 /** id de session bridge frais pour une nouvelle connexion réelle */
 const newSessionId = () => `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -40,12 +42,13 @@ export default function Dashboard() {
 
   const [period, setPeriod] = useState<Period>("today");
   const [qrFor, setQrFor] = useState<string | null>(null); // id session existante | id frais (nouvelle)
+  const [quotaOpen, setQuotaOpen] = useState(false);
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
   const [overrides, setOverrides] = useState<Record<string, SessionStatus>>({});
   const [flashId, setFlashId] = useState<string | null>(null);
 
-  // Sessions avec statuts locaux (reconnexion simulée — le store n'expose pas
-  // d'action de reconnexion ; l'override vit le temps de la session cockpit).
+  // Sessions avec statuts locaux (override optimiste en attendant le
+  // statut réel du bridge ; l'override vit le temps de la session cockpit).
   const merged = sessions.map((s) =>
     overrides[s.id] && overrides[s.id] !== s.status
       ? {
@@ -122,11 +125,18 @@ export default function Dashboard() {
   };
 
   return (
+    <CloudGate>
     <div className="mx-auto w-full max-w-[1440px] space-y-4 md:space-y-5">
       <DashboardHeader
         period={period}
         onPeriodChange={setPeriod}
         onConnectSession={() => {
+          // Contrôle quota WhatsApp (§20) avant d'ouvrir le flux QR
+          const plan = useSim.getState().org.plan;
+          if (sessions.length >= sessionQuota(plan)) {
+            setQuotaOpen(true);
+            return;
+          }
           const id = newSessionId();
           setNewIds((s) => new Set(s).add(id));
           setQrFor(id);
@@ -161,6 +171,13 @@ export default function Dashboard() {
         onClose={() => setQrFor(null)}
         onConnected={handleConnected}
       />
+
+      <QuotaReachedDialog
+        open={quotaOpen}
+        current={sessions.length}
+        onClose={() => setQuotaOpen(false)}
+      />
     </div>
+    </CloudGate>
   );
 }
