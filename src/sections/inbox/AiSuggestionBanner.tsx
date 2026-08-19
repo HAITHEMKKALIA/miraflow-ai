@@ -2,39 +2,19 @@
  * AiSuggestionBanner — panneau « Suggestion IA » (inbox.md S4).
  * Bordure iris 1px, fond glass iris/8. En-tête : icône, nom, confidence ring
  * 28px (% dessiné 600ms, mint ≥85 / amber <85) + temps relatif. Corps :
- * réponse générée (bulle blanche, 1-3 lignes), chips sources cliquables
+ * réponse générée (bulle blanche, 1-3 lignes)
  * (icône doc + nom + fragment), boutons Réviser / Envoyer / Ignorer.
  * Envoyer : bulle insérée, bannière morphée en toast « envoyé » (200ms).
  * Ignorer : confirmation discrète (« Masquer la suggestion ? »).
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, FileText, Loader2, PencilLine, Send, X } from "lucide-react";
+import { Check, Loader2, PencilLine, Send, X } from "lucide-react";
 import type { AiSuggestion } from "@/lib/sim/store";
 import { useAgents } from "@/lib/sim/store";
 import { ConfidenceRing } from "@/sections/agents/controls";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-
-/* ── Sources déterministes (démo) : 1 à 3 docs selon la suggestion ─────── */
-const SOURCE_POOL = [
-  { doc: "Catalogue produits 2025.pdf", frags: ["#12", "#47", "#31"] },
-  { doc: "FAQ livraison & retours.docx", frags: ["#08", "#22"] },
-  { doc: "Tarifs et formules.pdf", frags: ["#31", "#05"] },
-  { doc: "Politique SAV.pdf", frags: ["#02", "#17"] },
-];
-
-function sourcesFor(s: AiSuggestion): { doc: string; frag: string }[] {
-  let h = 0;
-  for (let i = 0; i < s.id.length; i++) h = (h * 31 + s.id.charCodeAt(i)) >>> 0;
-  const n = 1 + (h % 3);
-  const out: { doc: string; frag: string }[] = [];
-  for (let i = 0; i < n; i++) {
-    const pool = SOURCE_POOL[(h + i * 7) % SOURCE_POOL.length];
-    out.push({ doc: pool.doc, frag: pool.frags[(h + i) % pool.frags.length] });
-  }
-  return out;
-}
 
 function relTime(at: number): string {
   const s = Math.max(1, Math.round((Date.now() - at) / 1000));
@@ -62,7 +42,6 @@ export default function AiSuggestionBanner({
   const agent = agents.find((a) => a.id === suggestion.agentId);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
   const [sentState, setSentState] = useState<"idle" | "sending" | "sent">("idle");
-  const sources = useMemo(() => sourcesFor(suggestion), [suggestion]);
 
   const handleSend = () => {
     if (sentState !== "idle") return;
@@ -118,22 +97,6 @@ export default function AiSuggestionBanner({
           <p className="mt-3 rounded-r-md bg-white/95 px-3.5 py-2.5 text-[13px] leading-[20px] text-ink shadow-sm">
             {suggestion.text}
           </p>
-
-          {/* Chips sources cliquables */}
-          <div className="mt-2.5 flex flex-wrap gap-1.5">
-            {sources.map((src) => (
-              <button
-                key={`${src.doc}-${src.frag}`}
-                type="button"
-                title={`Ouvrir ${src.doc} — fragment ${src.frag}`}
-                className="flex items-center gap-1.5 rounded-full border border-line bg-surface-1/80 px-2.5 py-1 text-[11px] text-mid transition-colors hover:border-iris/50 hover:text-iris"
-              >
-                <FileText className="size-3 text-pulse" />
-                <span className="max-w-[140px] truncate">{src.doc}</span>
-                <span className="font-mono text-[10px] text-low">{src.frag}</span>
-              </button>
-            ))}
-          </div>
 
           {/* Actions */}
           <AnimatePresence mode="wait">

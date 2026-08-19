@@ -1,5 +1,5 @@
 /**
- * supabase.ts — client Supabase + repli gracieux en mode démo local.
+ * supabase.ts — client Supabase + repli gracieux en mode local hors-ligne.
  *
  * L'app doit TOUJOURS fonctionner même si la base est inaccessible
  * (offline, clé invalide, réseau filtré) : chaque helper fait try/catch
