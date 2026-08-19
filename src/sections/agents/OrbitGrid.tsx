@@ -11,7 +11,7 @@ import { Pause, Play, Settings2, Sparkles } from "lucide-react";
 import type { AiAgent } from "@/lib/sim/store";
 import { Sparkline, StatusDot, TickNumber } from "@/components/ui-shared";
 import { cn } from "@/lib/utils";
-import { AGENT_META, COLOR_STYLES, EXTRA_AGENTS } from "./data";
+import { AGENT_META, COLOR_STYLES } from "./data";
 import { useAgentsPage } from "./hooks";
 import { EASE } from "./motion";
 
@@ -52,7 +52,7 @@ const AgentCard = memo(function AgentCard({
   agent: AiAgent;
   index: number;
 }) {
-  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_analyst"]; // Fallback to analyst if missing
+  const meta = AGENT_META[agent.key || agent.id] || AGENT_META["ag_support"]; // Fallback to analyst if missing
   const styles = COLOR_STYLES[meta.color];
   const { modes, paused, toggleMode, togglePaused, openConfig, testAgent, updatedAt } = useAgentsPage();
   const mode = modes[agent.id] ?? agent.mode;
@@ -143,14 +143,14 @@ const AgentCard = memo(function AgentCard({
         </div>
         <div>
           <p className="label-micro text-low">Escalades</p>
-          <p className="mt-1 font-mono text-[15px] font-medium text-hi tabular">{meta.escalations}</p>
+          <p className="mt-1 font-mono text-[15px] font-medium text-hi tabular">{agent.stats?.escalations ?? 0}</p>
         </div>
       </div>
 
       {/* Sparkline 7 j */}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="label-micro text-low">7 jours</span>
-        <Sparkline data={meta.spark} width={120} height={30} className="transition-transform duration-500 group-hover:scale-x-105" />
+        <Sparkline data={[0, 0, 0, 0, 0, 0, 0]} width={120} height={30} className="transition-transform duration-500 group-hover:scale-x-105" />
       </div>
 
       {/* Actions */}
@@ -182,7 +182,7 @@ const AgentCard = memo(function AgentCard({
 /* ── Grille ────────────────────────────────────────────────────────────── */
 export default function OrbitGrid({ agents }: { agents: AiAgent[] }) {
   /* 6 agents du SimEngine + 2 agents locaux (Traduction, Analyse d'images) */
-  const all = [...agents, ...EXTRA_AGENTS];
+  const all = agents;
   return (
     <section className="relative">
       <DecorativeCore />

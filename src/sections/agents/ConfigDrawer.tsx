@@ -81,7 +81,7 @@ export default function ConfigDrawer() {
     }
   }, [configAgentId, configs]);
 
-  const meta = configAgentId ? (AGENT_META[configAgentId] || AGENT_META["ag_analyst"]) : null;
+  const meta = configAgentId ? (AGENT_META[configAgentId] || AGENT_META["ag_support"]) : null;
   const styles = meta ? COLOR_STYLES[meta.color] : null;
   const escalated = useMemo(() => (draft ? escalationRate(draft.threshold) : 0), [draft]);
 

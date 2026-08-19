@@ -80,7 +80,7 @@ export default function JournalLog() {
             </thead>
             <tbody>
               {rows.map((j) => {
-                const meta = AGENT_META[j.agentId] || AGENT_META["ag_analyst"];
+                const meta = AGENT_META[j.agentId] || AGENT_META["ag_support"];
                 const styles = meta ? COLOR_STYLES[meta.color] : null;
                 return (
                   <motion.tr

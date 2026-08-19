@@ -140,6 +140,7 @@ function Highlight({ text, query }: { text: string; query: string }) {
 /* ── Section ───────────────────────────────────────────────────────────── */
 export default function KnowledgeBase() {
   const { docs, addDoc, removeDoc, reindexDoc, totalFragments, kbRef } = useAgentsPage();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
   const [previewDoc, setPreviewDoc] = useState<KnowledgeDoc | null>(null);
   const [removeTarget, setRemoveTarget] = useState<KnowledgeDoc | null>(null);
@@ -147,14 +148,10 @@ export default function KnowledgeBase() {
 
   const fragments = useMemo(() => {
     if (!previewDoc) return [];
-    const excerpts = DOC_EXCERPTS[previewDoc.id] ?? [
-      "Fragment extrait du document téléversé, en cours d'enrichissement par l'indexeur.",
-      "Section détectée automatiquement — le texte sera affiné à la prochaine indexation.",
-    ];
-    return Array.from({ length: 12 }, (_, i) => ({
-      num: i + 1,
-      text: excerpts[i % excerpts.length],
-    })).filter((f) => !search.trim() || f.text.toLowerCase().includes(search.toLowerCase()));
+    const excerpts = DOC_EXCERPTS[previewDoc.id] ?? [];
+    return excerpts
+      .map((text, i) => ({ num: i + 1, text }))
+      .filter((f) => !search.trim() || f.text.toLowerCase().includes(search.toLowerCase()));
   }, [previewDoc, search]);
 
   return (
@@ -165,7 +162,7 @@ export default function KnowledgeBase() {
         action={
           <button
             type="button"
-            onClick={addDoc}
+            onClick={() => fileInputRef.current?.click()}
             className="gradient-signature flex items-center gap-2 rounded-full px-4 py-2 text-[13px] font-semibold text-white transition-all hover:-translate-y-0.5 hover:shadow-glow-iris active:scale-[.97]"
           >
             <Plus className="size-4" />
@@ -181,7 +178,7 @@ export default function KnowledgeBase() {
         whileInView={{ opacity: 1, y: 0 }}
         viewport={{ once: true }}
         transition={{ duration: 0.45, ease: EASE }}
-        onClick={addDoc}
+        onClick={() => fileInputRef.current?.click()}
         onDragOver={(e) => {
           e.preventDefault();
           setDragOver(true);
@@ -190,7 +187,7 @@ export default function KnowledgeBase() {
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
-          addDoc();
+          addDoc(e.dataTransfer.files?.[0]);
         }}
         className={cn(
           "mb-4 flex w-full items-center justify-center gap-3 rounded-r-md border border-dashed px-4 py-6 transition-colors",
@@ -199,9 +196,19 @@ export default function KnowledgeBase() {
       >
         <CloudUpload className={cn("size-5", dragOver ? "text-pulse" : "text-low")} />
         <span className="text-[13px] text-mid">
-          PDF, DOCX, TXT, URL — <span className="text-hi">glissez ici</span> ou cliquez pour simuler un ajout
+          PDF, DOCX, TXT — <span className="text-hi">glissez ici</span> ou cliquez pour choisir un fichier
         </span>
       </motion.button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.doc,.docx,.txt,.md"
+        className="hidden"
+        onChange={(e) => {
+          addDoc(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
 
       {/* Table documents */}
       <div className="overflow-hidden rounded-r-lg border border-line bg-surface-1">
@@ -257,7 +264,7 @@ export default function KnowledgeBase() {
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {doc.agents.map((id) => {
-                            const meta = AGENT_META[id] || AGENT_META["ag_analyst"];
+                            const meta = AGENT_META[id] || AGENT_META["ag_support"];
                             if (!meta) return null;
                             return (
                               <span
