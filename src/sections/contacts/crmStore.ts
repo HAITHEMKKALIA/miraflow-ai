@@ -1,7 +1,7 @@
 /**
  * crmStore — surcouche CRM locale et partagée entre les pages Contacts et
  * Inbox. Le SimEngine expose des contacts en lecture seule (aucune action de
- * mutation) ; ce store Zustand gère les mutations de démo : changement
+ * mutation) ; ce store Zustand gère les mutations locales : changement
  * d'étape, tags, ajout (import/nouveau), suppression, consentements, notes et
  * journal d'activité. Persisté en localStorage (« mf:crm »).
  */

@@ -22,6 +22,11 @@ const Contacts = lazy(() => import("@/pages/Contacts"));
 const Campaigns = lazy(() => import("@/pages/Campaigns"));
 const Workflows = lazy(() => import("@/pages/Workflows"));
 const Agents = lazy(() => import("@/pages/Agents"));
+const Products = lazy(() => import("@/pages/Products"));
+const Orders = lazy(() => import("@/pages/Orders"));
+const Deliveries = lazy(() => import("@/pages/Deliveries"));
+const Customers = lazy(() => import("@/pages/Customers"));
+const Knowledge = lazy(() => import("@/pages/Knowledge"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 const AdminLogin = lazy(() => import("@/pages/AdminLogin"));
@@ -64,6 +69,11 @@ export default function App() {
           <Route path="/app/campaigns" element={<Campaigns />} />
           <Route path="/app/workflows" element={<Workflows />} />
           <Route path="/app/agents" element={<Agents />} />
+          <Route path="/app/produits" element={<Products />} />
+          <Route path="/app/commandes" element={<Orders />} />
+          <Route path="/app/livraisons" element={<Deliveries />} />
+          <Route path="/app/clients" element={<Customers />} />
+          <Route path="/app/connaissances" element={<Knowledge />} />
           <Route path="/app/settings" element={<Settings />} />
         </Route>
 
