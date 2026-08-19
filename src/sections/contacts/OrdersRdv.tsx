@@ -1,9 +1,9 @@
 /**
  * OrdersRdv — sections « Commandes » et « Rendez-vous » de la fiche contact,
  * partagées entre l'Inbox (ContactPanel, accordéons) et la page Contacts
- * (ContactDrawer, onglets dédiés). Données déterministes dérivées du contact
- * (id → seed, montants TND). RDV : « Confirmer » → toast + statut confirmé,
- * « Replanifier » → sélecteur de créneau simulé.
+ * (ContactDrawer, onglets dédiés). Commandes = données réelles du store
+ * (module Commandes, rattachées par nom client). Rendez-vous : aucun module
+ * de planification n'existe encore — la liste démarre vide.
  */
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -12,33 +12,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { Contact } from "@/lib/sim/store";
+import { useSim } from "@/lib/sim/store";
 import { fmtDate, fmtTime } from "./shared";
 import { cn } from "@/lib/utils";
 
-/* ── PRNG déterministe (même approche que shared.tsx, seed distinct) ───── */
-function hashStr(s: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 const DAY = 86_400_000;
-const HOUR = 3_600_000;
 
-/* ── Types & générateurs ───────────────────────────────────────────────── */
+/* ── Types & accès aux données réelles ─────────────────────────────────── */
 export interface ContactOrder {
   id: string;
   /** n° de commande affiché, ex. « CMD-2481 » */
@@ -57,74 +37,28 @@ export interface Appointment {
   at: number;
 }
 
-const PRODUCTS: { label: string; price: number }[] = [
-  { label: "Coffret Aid « Découverte »", price: 68 },
-  { label: "Baklava pistache 500 g", price: 42 },
-  { label: "Makroudh au miel ×12", price: 18 },
-  { label: "Coffret « Prestige » 48 pièces", price: 145 },
-  { label: "Cornes de gazelle ×20", price: 36 },
-  { label: "Samsa aux amandes ×10", price: 24 },
-  { label: "Carte cadeau 50 TND", price: 50 },
-  { label: "Assortiment classique 1 kg", price: 78 },
-];
-
-const SERVICES = [
-  "Dégustation mariage",
-  "Retrait boutique Lafayette",
-  "Visite atelier Ariana",
-  "Brief traiteur événement",
-  "Commande entreprise — dégustation",
-];
-
-const AGENTS = ["Amira", "Youssef", "Ines", "Karim"];
-
-/** 2-3 commandes déterministes (les plus récentes peuvent être « en cours »). */
+/** Commandes réelles du store rattachées au contact (par nom client). */
 export function getContactOrders(contact: Contact): ContactOrder[] {
-  const rnd = mulberry32(hashStr(`${contact.id}_orders`));
-  const int = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
-  const count = int(2, 3);
-  const used = new Set<number>();
-  const orders: ContactOrder[] = [];
-  for (let i = 0; i < count; i++) {
-    let pi = Math.floor(rnd() * PRODUCTS.length);
-    while (used.has(pi)) pi = (pi + 1) % PRODUCTS.length;
-    used.add(pi);
-    const p = PRODUCTS[pi];
-    const qty = rnd() > 0.6 ? 2 : 1;
-    const at = Date.now() - int(2, 70) * DAY - int(0, 20) * HOUR;
-    orders.push({
-      id: `${contact.id}_ord${i}`,
-      num: `CMD-${2400 + int(0, 420)}`,
-      product: qty > 1 ? `${p.label} ×${qty}` : p.label,
-      amount: p.price * qty,
-      status: "delivered",
-      at,
-    });
-  }
-  orders.sort((a, b) => b.at - a.at);
-  // La plus récente est « en cours » si elle date de moins de ~15 j
-  if (Date.now() - orders[0].at < 15 * DAY) orders[0] = { ...orders[0], status: "processing" };
-  return orders;
+  return useSim
+    .getState()
+    .orders.filter((o) => o.customerName === contact.name)
+    .map((o) => ({
+      id: o.id,
+      num: o.orderNumber,
+      product:
+        o.items
+          .map((it) => (it.quantity > 1 ? `${it.productName} ×${it.quantity}` : it.productName))
+          .join(", ") || o.orderNumber,
+      amount: o.total,
+      status: (o.status === "delivered" ? "delivered" : "processing") as ContactOrder["status"],
+      at: o.createdAt,
+    }))
+    .sort((a, b) => b.at - a.at);
 }
 
-/** 1-2 rendez-vous à venir, déterministes. */
-export function getContactAppointments(contact: Contact): Appointment[] {
-  const rnd = mulberry32(hashStr(`${contact.id}_rdv`));
-  const int = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
-  const count = int(1, 2);
-  const out: Appointment[] = [];
-  for (let i = 0; i < count; i++) {
-    const day = new Date(Date.now() + int(1 + i * 3, 4 + i * 5) * DAY);
-    day.setHours(int(9, 17), [0, 15, 30, 45][int(0, 3)], 0, 0);
-    out.push({
-      id: `${contact.id}_rdv${i}`,
-      service: SERVICES[Math.floor(rnd() * SERVICES.length)],
-      agent: AGENTS[Math.floor(rnd() * AGENTS.length)],
-      at: day.getTime(),
-    });
-  }
-  out.sort((a, b) => a.at - b.at);
-  return out;
+/** Aucun module de rendez-vous : liste vide tant qu'aucun RDV n'existe. */
+export function getContactAppointments(_contact: Contact): Appointment[] {
+  return [];
 }
 
 /* ── Commandes ─────────────────────────────────────────────────────────── */
@@ -136,6 +70,9 @@ const ORDER_STATUS: Record<ContactOrder["status"], { label: string; chip: string
 export function OrdersBlock({ contact }: { contact: Contact }) {
   const orders = useMemo(() => getContactOrders(contact), [contact]);
   const total = orders.reduce((acc, o) => acc + o.amount, 0);
+  if (orders.length === 0) {
+    return <p className="py-6 text-center text-[13px] text-low">Aucune commande enregistrée pour ce contact.</p>;
+  }
   return (
     <div className="space-y-2">
       {orders.map((o) => {
@@ -177,7 +114,7 @@ function AppointmentCard({ appt, contactName }: { appt: Appointment; contactName
   const [confirmed, setConfirmed] = useState(false);
   const [picking, setPicking] = useState(false);
 
-  /* 3 créneaux alternatifs simulés (déterministes à partir du RDV initial) */
+  /* 3 créneaux alternatifs proposés (jours suivants, horaires ouvrés) */
   const slots = useMemo(
     () =>
       [1, 2, 3].map((i) => {
@@ -257,7 +194,7 @@ function AppointmentCard({ appt, contactName }: { appt: Appointment; contactName
         </button>
       </div>
 
-      {/* Sélecteur de créneau simulé */}
+      {/* Sélecteur de créneau */}
       <AnimatePresence initial={false}>
         {picking && (
           <motion.div
@@ -291,6 +228,9 @@ function AppointmentCard({ appt, contactName }: { appt: Appointment; contactName
 export function AppointmentsBlock({ contact }: { contact: Contact }) {
   const appts = useMemo(() => getContactAppointments(contact), [contact]);
   const first = contact.name.split(" ")[0] ?? contact.name;
+  if (appts.length === 0) {
+    return <p className="py-6 text-center text-[13px] text-low">Aucun rendez-vous planifié.</p>;
+  }
   return (
     <div className="space-y-2">
       {appts.map((a) => (

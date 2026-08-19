@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { fetchBridgeRuntimeBootstrap } from "@/lib/bridge";
-import { useSim, type Conversation, type Contact, type QrSession, type SessionStatus, type Message, type AiAgent, type AiSuggestion } from "@/lib/sim/store";
+import { useSim, type Conversation, type Contact, type QrSession, type SessionStatus, type Message, type AiAgent, type AiSuggestion, type AgentMode } from "@/lib/sim/store";
 
 function toSessionStatus(value: string): SessionStatus {
   if (value === "connected") return "connected";
@@ -87,13 +87,12 @@ function mergeConversationsById(current: Conversation[], incoming: Conversation[
 }
 
 export default function BridgeRuntimeBootstrap() {
-  const demoMode = useSim((s) => s.demoMode);
   const orgName = useSim((s) => s.org.name);
   const runningRef = useRef(false);
 
   const enabled = useMemo(
-    () => !demoMode && typeof orgName === "string" && orgName.trim().length > 0,
-    [demoMode, orgName],
+    () => typeof orgName === "string" && orgName.trim().length > 0,
+    [orgName],
   );
 
   useEffect(() => {
@@ -142,7 +141,7 @@ export default function BridgeRuntimeBootstrap() {
           );
 
           const contacts = mergeContactsById(state.contacts, payload.contacts);
-          const conversations = mergeConversationsById(state.conversations, payload.conversations, sessionIdMap);
+          const conversations = mergeConversationsById(state.conversations, payload.conversations as unknown as Conversation[] | undefined, sessionIdMap);
 
           // BUG FIX #5: Fusionner les agents AI depuis DB (priorité au state local pour les runtime)
           const dbAgents: AiAgent[] = Array.isArray((payload as any).agents)
@@ -151,7 +150,7 @@ export default function BridgeRuntimeBootstrap() {
                 key: String(row.key ?? "analyst"),
                 name: String(row.name ?? "Agent"),
                 tagline: String(row.tagline ?? ""),
-                mode: String(row.mode ?? "suggestion"),
+                mode: (row.mode === "autonomous" ? "autonomous" : "suggestion") as AgentMode,
                 confidence: Number(row.confidence ?? row.threshold ?? 85),
                 handled: Number(row.handled ?? 0),
               } satisfies AiAgent))
