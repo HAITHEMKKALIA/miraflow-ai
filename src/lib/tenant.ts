@@ -29,7 +29,7 @@ function writeTenantSession(orgName: string, userName: string): boolean {
 
 export function hasTenantWorkspace(): boolean {
   const state = useSim.getState();
-  return !state.demoMode && Boolean(state.org.name.trim()) && Boolean(state.team[0]?.name?.trim());
+  return Boolean(state.org.name.trim()) && Boolean(state.team[0]?.name?.trim());
 }
 
 export function tenantLogin(orgName: string, userName: string): boolean {

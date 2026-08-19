@@ -6,6 +6,7 @@ export default function SettingsNav() {
     { id: "general", label: "Général" },
     { id: "equipe", label: "Équipe" },
     { id: "sessions", label: "Sessions QR" },
+    { id: "ia", label: "IA & RAG" },
     { id: "plan", label: "Plan & Facturation" },
     { id: "securite", label: "Sécurité" },
     { id: "notifications", label: "Notifications" },

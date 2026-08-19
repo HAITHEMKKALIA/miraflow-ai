@@ -36,7 +36,7 @@ export default function WorkflowEditor({
         <button className="bg-iris text-white px-4 py-1 rounded">Publier</button>
       </div>
       <div className="flex-1 bg-surface-2 p-10 text-center">
-        Onglet {initialTab} de l'éditeur de workflow (Simulation)
+        Onglet {initialTab} de l'éditeur de workflow
         <div className="mt-3 text-sm text-low">{log.length} entrées de journal chargées</div>
       </div>
     </div>

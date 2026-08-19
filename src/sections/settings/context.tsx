@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type TabId = "general" | "equipe" | "sessions" | "plan" | "securite" | "notifications" | "apparence";
+export type TabId = "general" | "equipe" | "sessions" | "ia" | "plan" | "securite" | "notifications" | "apparence";
 
 interface SettingsCtx {
   tab: TabId;

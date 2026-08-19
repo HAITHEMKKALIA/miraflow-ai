@@ -1,7 +1,7 @@
 /**
  * owner.ts — authentification du propriétaire plateforme (Super Admin).
  *
- * Compte propriétaire unique (démo) : haitham.kalia@gmail.com.
+ * Compte propriétaire unique (console Super Admin).
  * La session est matérialisée par un jeton localStorage `mf:owner-session`
  * (valide 12 h). La console /admin est protégée par <RequireOwner/>.
  */
