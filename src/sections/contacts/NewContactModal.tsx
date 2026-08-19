@@ -115,7 +115,7 @@ export default function NewContactModal({ open, onClose, onCreate }: NewContactM
                 <div>
                   <label className="label-micro text-low" htmlFor="nc-phone">Téléphone *</label>
                   <input id="nc-phone" value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={() => setTouched(true)}
-                    placeholder="+216 98 412 307" dir="ltr"
+                    placeholder="+216 00 000 000" dir="ltr"
                     className={cn("mt-1 w-full rounded-r-sm border bg-surface-2 px-3 py-2 font-mono text-[13px] tabular text-hi placeholder:text-low focus:outline-none",
                       touched && !phoneValid ? "border-rose" : "border-line focus:border-iris")} />
                   {touched && !phoneValid && <p className="mt-1 text-[11px] text-rose">Numéro invalide.</p>}

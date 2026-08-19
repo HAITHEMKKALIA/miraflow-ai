@@ -170,10 +170,10 @@ export default function AgentsOrbit() {
 
         <Reveal className="mt-14 text-center">
           <Link
-            to="/app/agents"
+            to="/onboarding"
             className="group inline-flex items-center gap-2 rounded-full border border-line bg-surface-1 px-6 py-3 text-[14px] font-semibold text-hi transition-all hover:-translate-y-0.5 hover:border-iris/50 hover:shadow-glow-iris"
           >
-            Tester un agent dans la démo
+            Créer mon espace gratuitement
             <ArrowRight className="size-4 text-pulse transition-transform group-hover:translate-x-1" />
           </Link>
         </Reveal>
