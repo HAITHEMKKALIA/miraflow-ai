@@ -13,14 +13,10 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router";
 import { Sparkline } from "@/components/ui-shared";
-import { useCampaigns, useChartSeries, useConversations, useKpis, useSim } from "@/lib/sim/store";
+import { useCampaigns, useConversations, useKpis } from "@/lib/sim/store";
 import type { Period } from "./DashboardHeader";
 import { CountUpTick, EASE } from "./shared";
 import { cn } from "@/lib/utils";
-
-/** Référentiel de départ du SimEngine (pour dériver les deltas live) */
-const MSG0 = 2481;
-const REPLIES0 = 484; // 96 (Aid) + 388 (Ramadan)
 
 interface KpiDef {
   id: string;
@@ -40,24 +36,6 @@ interface KpiDef {
   flash?: boolean; // flash mint 300ms sur la valeur
   live?: boolean;  // aria-live="polite"
 }
-
-const SPARKS: Record<Period, Record<string, number[]>> = {
-  today: {
-    conv: [98, 104, 112, 108, 119, 124, 128],
-    msg: [640, 720, 810, 905, 990, 1140, 1284],
-    rev: [5.1, 5.6, 6.2, 6.8, 7.3, 7.9, 8.45],
-  },
-  "7d": {
-    conv: [610, 640, 690, 720, 705, 780, 812],
-    msg: [9.8, 10.4, 11.2, 12.1, 12.8, 13.9, 14.8],
-    rev: [31, 34, 38, 41, 45, 49, 52.3],
-  },
-  "30d": {
-    conv: [2480, 2620, 2810, 2730, 2960, 3180, 3412],
-    msg: [44, 47, 51, 49, 55, 58, 61.2],
-    rev: [152, 168, 175, 183, 196, 208, 218.9],
-  },
-};
 
 /** Anneau radial 48px qui se dessine (900ms) — Taux de réponse */
 function RateRing({ rate, animKey }: { rate: number; animKey: string }) {
@@ -166,8 +144,6 @@ function KpiCardView({ def, index, period }: { def: KpiDef; index: number; perio
 export default function KpiRow({ period }: { period: Period }) {
   const kpis = useKpis();
   const campaigns = useCampaigns();
-  const chart = useChartSeries();
-  const demoMode = useSim((s) => s.demoMode);
   const conversations = useConversations();
 
   // Flash mint 300ms quand « Messages aujourd'hui » tique
@@ -182,105 +158,41 @@ export default function KpiRow({ period }: { period: Period }) {
     }
   }, [kpis.messagesToday]);
 
-  const repliesNow = useMemo(() => campaigns.reduce((acc, c) => acc + c.replies, 0), [campaigns]);
-  const msgDelta = kpis.messagesToday - MSG0;
-  const revDelta = (repliesNow - REPLIES0) * 12;
-
   const defs: KpiDef[] = useMemo(() => {
-    /* Espace réel (essai / compte approuvé) : KPI 100 % dérivés des vraies données */
-    if (!demoMode) {
-      const openConvs = conversations.filter((c) => c.status === "open" || c.status === "pending").length;
-      const replied = conversations.filter((c) => c.thread.some((m) => m.direction === "out")).length;
-      const rate = conversations.length ? Math.round((replied / conversations.length) * 100) : 0;
-      const revenue = campaigns.reduce((acc, c) => acc + c.replies, 0) * 12;
-      const flat = [0, 0, 0, 0, 0, 0, 0, 0];
-      return [
-        {
-          id: "conv", label: "Conversations actives",
-          hint: "Conversations ouvertes ou en attente sur la période sélectionnée.",
-          icon: MessagesSquare, iconClass: "bg-iris/10 text-iris",
-          value: openConvs, delta: 0, spark: flat, to: "/app/inbox",
-        },
-        {
-          id: "msg",
-          label: period === "today" ? "Messages aujourd'hui" : period === "7d" ? "Messages · 7 jours" : "Messages · 30 jours",
-          hint: "Messages entrants et sortants traités par vos sessions QR.",
-          icon: MessageCircle, iconClass: "bg-pulse/10 text-pulse",
-          value: kpis.messagesToday, delta: 0, spark: flat, to: "/app/inbox", flash, live: true,
-        },
-        {
-          id: "rate", label: "Taux de réponse",
-          hint: "Part des conversations ayant reçu une réponse en moins de 5 minutes.",
-          icon: Percent, iconClass: "bg-mint/10 text-mint",
-          value: rate, suffix: "%", delta: 0, ring: rate, to: "/app/inbox",
-        },
-        {
-          id: "rev", label: "Revenus attribués",
-          hint: "Ventes attribuées aux campagnes et relances automatisées (attribution dernier contact).",
-          icon: Banknote, iconClass: "bg-amber/10 text-amber",
-          value: revenue, suffix: "TND", delta: 0, sub: "campagnes + relances", spark: flat, to: "/app/campaigns",
-        },
-      ];
-    }
-    const s = SPARKS[period];
-    const liveMsg =
-      period === "today" ? kpis.messagesToday : period === "7d" ? 14820 + msgDelta : 61240 + msgDelta;
-    const msgSpark =
-      period === "today" && chart.length > 7 ? chart.slice(-8).map((v) => Math.max(4, v)) : s.msg;
+    /* KPI 100 % dérivés des vraies données de l'espace (0 au départ) */
+    const openConvs = conversations.filter((c) => c.status === "open" || c.status === "pending").length;
+    const replied = conversations.filter((c) => c.thread.some((m) => m.direction === "out")).length;
+    const rate = conversations.length ? Math.round((replied / conversations.length) * 100) : 0;
+    const revenue = campaigns.reduce((acc, c) => acc + c.replies, 0) * 12;
+    const flat = [0, 0, 0, 0, 0, 0, 0, 0];
     return [
       {
-        id: "conv",
-        label: "Conversations actives",
+        id: "conv", label: "Conversations actives",
         hint: "Conversations ouvertes ou en attente sur la période sélectionnée.",
-        icon: MessagesSquare,
-        iconClass: "bg-iris/10 text-iris",
-        value: period === "today" ? 128 + msgDelta : period === "7d" ? 812 + msgDelta : 3412 + msgDelta,
-        delta: period === "today" ? 12 : period === "7d" ? 9 : 14,
-        spark: s.conv,
-        to: "/app/inbox",
+        icon: MessagesSquare, iconClass: "bg-iris/10 text-iris",
+        value: openConvs, delta: 0, spark: flat, to: "/app/inbox",
       },
       {
         id: "msg",
-        label:
-          period === "today" ? "Messages aujourd'hui" : period === "7d" ? "Messages · 7 jours" : "Messages · 30 jours",
+        label: period === "today" ? "Messages aujourd'hui" : period === "7d" ? "Messages · 7 jours" : "Messages · 30 jours",
         hint: "Messages entrants et sortants traités par vos sessions QR.",
-        icon: MessageCircle,
-        iconClass: "bg-pulse/10 text-pulse",
-        value: liveMsg,
-        delta: period === "today" ? 8 : period === "7d" ? 11 : 16,
-        spark: msgSpark,
-        to: "/app/inbox",
-        flash,
-        live: true,
+        icon: MessageCircle, iconClass: "bg-pulse/10 text-pulse",
+        value: kpis.messagesToday, delta: 0, spark: flat, to: "/app/inbox", flash, live: true,
       },
       {
-        id: "rate",
-        label: "Taux de réponse",
+        id: "rate", label: "Taux de réponse",
         hint: "Part des conversations ayant reçu une réponse en moins de 5 minutes.",
-        icon: Percent,
-        iconClass: "bg-mint/10 text-mint",
-        value: period === "today" ? 94 : period === "7d" ? 93 : 95,
-        suffix: "%",
-        delta: 2,
-        deltaUnit: " pts",
-        ring: period === "today" ? 94 : period === "7d" ? 93 : 95,
-        to: "/app/inbox",
+        icon: Percent, iconClass: "bg-mint/10 text-mint",
+        value: rate, suffix: "%", delta: 0, ring: rate, to: "/app/inbox",
       },
       {
-        id: "rev",
-        label: "Revenus attribués",
+        id: "rev", label: "Revenus attribués",
         hint: "Ventes attribuées aux campagnes et relances automatisées (attribution dernier contact).",
-        icon: Banknote,
-        iconClass: "bg-amber/10 text-amber",
-        value: (period === "today" ? 8450 : period === "7d" ? 52300 : 218900) + revDelta,
-        suffix: "TND",
-        delta: period === "today" ? 21 : period === "7d" ? 18 : 24,
-        sub: "campagnes + relances",
-        spark: s.rev,
-        to: "/app/campaigns",
+        icon: Banknote, iconClass: "bg-amber/10 text-amber",
+        value: revenue, suffix: "TND", delta: 0, sub: "campagnes + relances", spark: flat, to: "/app/campaigns",
       },
     ];
-  }, [period, kpis.messagesToday, msgDelta, revDelta, chart, flash, demoMode, conversations, campaigns]);
+  }, [period, kpis.messagesToday, flash, conversations, campaigns]);
 
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
