@@ -13,22 +13,57 @@ ce serveur doit tourner en permanence, et son URL doit être renseignée dans
 | Méthode | Route | Réponse |
 |---|---|---|
 | `GET` | `/health` | `{ ok: true }` |
-| `POST` | `/sessions` `{ "sessionId": "ma-session" }` | `{ status: "qr_pending" }` |
+| `POST` | `/sessions` `{ "sessionId": "s1", "organizationId": "org_A" }` | `{ status: "qr_pending", organizationId }` |
 | `GET` | `/sessions/:id/qr` | `{ status, qr?, phone? }` — `qr` = dataURL PNG |
 | `GET` | `/sessions/:id/status` | `{ status, phone?, pushname? }` |
+| `POST` | `/sessions/:id/messages` `{ "to", "text" }` | envoi direct (409 si déconnecté) |
+| `POST` | `/sessions/:id/send` `{ "to", "text" }` | `{ status: "sent" }` ou `{ status: "waiting_connection" }` (202, mis en file) |
+| `GET` | `/orgs/:orgId/sessions` | `{ organizationId, sessions: [{ sessionId, status, phone, lastSeenAt, queuedMessages }], count }` |
 | `POST` | `/sessions/:id/logout` | `{ status: "disconnected" }` |
 
 Statuts : `qr_pending` → `connecting` → `connected` (ou `disconnected`).
-L'état d'authentification est persisté dans `./auth/<sessionId>` : après un
-redémarrage, les sessions connectées se reconnectent sans rescanner le QR
-(reconnexion automatique avec backoff en cas de micro-coupure).
+
+### Multi-tenant et isolation
+
+`POST /sessions` accepte un `organizationId` optionnel (défaut `default` :
+l'API historique sans org reste compatible). Les credentials Baileys sont
+isolés physiquement par organisation :
+
+```
+auth/
+├── org_A/
+│   ├── session_1/   (owner.json + creds Baileys)
+│   └── session_2/
+├── org_B/
+│   └── session_3/
+└── default/         (ancien format ./auth/<sessionId> migré automatiquement ici)
+```
+
+Chaque dossier de session contient un `owner.json` `{ "organizationId": ... }`.
+Démarrer une session dont le dossier appartient à une autre organisation
+renvoie **403 `{ error: "owner_mismatch" }`**. L'endpoint
+`GET /orgs/:orgId/sessions` ne liste que les sessions de l'org et n'expose
+jamais les credentials.
+
+### Quota, anti-doublon, concurrence, mode dégradé
+
+- **Quota** : si `MAX_SESSIONS_PER_ORG > 0`, créer une session au-delà du quota
+  de l'org renvoie **403 `{ error: "quota_exceeded" }`** (contrôle côté backend).
+- **Anti-doublon** : chaque `whatsapp_message_id` n'est traité qu'une fois par
+  session (Set en mémoire borné à 10 000 ids).
+- **Concurrence** : un verrou logique par conversation (chaîne de Promises)
+  garantit le traitement séquentiel des messages entrants d'une même conversation.
+- **Mode dégradé** : `POST /sessions/:id/send` sur une session déconnectée met
+  le message dans une file en mémoire (`waiting_connection`, HTTP 202) ; la
+  file est vidée automatiquement à la reconnexion. Aucune perte silencieuse.
 
 ## Variables d'environnement
 
 | Variable | Défaut | Description |
 |---|---|---|
 | `PORT` | `3100` | Port HTTP d'écoute |
-| `AUTH_DIR` | `./auth` | Dossier de persistance des sessions |
+| `AUTH_DIR` | `./auth` | Dossier racine de persistance (`<AUTH_DIR>/<orgId>/<sessionId>/`) |
+| `MAX_SESSIONS_PER_ORG` | `0` (illimité) | Quota de sessions actives par organisation |
 | `LOG_LEVEL` | `info` | Niveau de logs pino |
 
 ## Déploiement sur Railway

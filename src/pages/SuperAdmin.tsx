@@ -13,7 +13,7 @@
  * couvre le tenant courant) ; les conversions d'essais (≈40 s) font ticker
  * MRR/clients/essais avec flash mint + toast.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { useTenants, type PlanId, type Tenant } from "@/lib/sim/store";
@@ -23,7 +23,7 @@ import ContextBar, {
   PromoCodes, Maintenance
 } from "@/sections/superadmin/Sections";
 import {
-  DEFAULT_QUOTAS, PLATFORM, PLAN_META, tenantExtra, type RichTenant, type TenantExtra,
+  DEFAULT_QUOTAS, PLATFORM, tenantExtra, type RichTenant, type TenantExtra,
   type TenantStatus,
 } from "@/sections/superadmin/data";
 
@@ -34,11 +34,11 @@ export default function SuperAdmin() {
   const storeTenants = useTenants();
 
   /* ── État plateforme vivant ─────────────────────────────────────────── */
-  const [mrr, setMrr] = useState(PLATFORM.mrr);
-  const [clients, setClients] = useState(PLATFORM.clients);
+  const [mrr] = useState(PLATFORM.mrr);
+  const [clients] = useState(PLATFORM.clients);
   const [trials, setTrials] = useState(PLATFORM.trials);
-  const [sessionsUp, setSessionsUp] = useState(PLATFORM.sessionsUp);
-  const [sessionsFlash, setSessionsFlash] = useState(false);
+  const [sessionsUp] = useState(PLATFORM.sessionsUp);
+  const [sessionsFlash] = useState(false);
 
   /* ── Tenants enrichis + overrides (statuts, quotas, suppressions) ────── */
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -62,44 +62,8 @@ export default function SuperAdmin() {
   const richRef = useRef(richTenants);
   richRef.current = richTenants;
 
-  /* ── Sessions connectées : tick ±1 toutes les 8–15 s (flash) ─────────── */
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    let flashTimer: ReturnType<typeof setTimeout>;
-    const loop = () => {
-      setSessionsUp((v) => Math.min(PLATFORM.sessionsTotal, Math.max(178, v + (Math.random() > 0.5 ? 1 : -1))));
-      setSessionsFlash(true);
-      flashTimer = setTimeout(() => setSessionsFlash(false), 400);
-      timer = setTimeout(loop, 8000 + Math.random() * 7000);
-    };
-    timer = setTimeout(loop, 8000 + Math.random() * 7000);
-    return () => {
-      clearTimeout(timer);
-      clearTimeout(flashTimer);
-    };
-  }, []);
-
-  /* ── Conversion d'essai simulée (≈40 s) : ligne flash mint + toast ────── */
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const loop = () => {
-      const candidate = richRef.current.find((t) => t.status === "trial");
-      if (candidate) {
-        setOverrides((o) => ({ ...o, [candidate.id]: { ...o[candidate.id], status: "active" } }));
-        setMrr((m) => m + candidate.mrr);
-        setClients((c) => c + 1);
-        setTrials((t) => Math.max(0, t - 1));
-        setHighlightId(candidate.id);
-        setTimeout(() => setHighlightId((id) => (id === candidate.id ? null : id)), 2200);
-        toast.success(`${candidate.name} est passé à ${PLAN_META[candidate.plan].label}`, {
-          description: `+${candidate.mrr} TND MRR — essai converti en abonnement.`,
-        });
-      }
-      timer = setTimeout(loop, 35_000 + Math.random() * 10_000);
-    };
-    timer = setTimeout(loop, 38_000);
-    return () => clearTimeout(timer);
-  }, []);
+  /* ── Indicateurs plateforme : aucun tick automatique — uniquement les
+   *  mouvements réels (approbations d'inscriptions, actions admin). ─────── */
 
   /* ── Actions ─────────────────────────────────────────────────────────── */
   const impersonate = (name: string) => {
