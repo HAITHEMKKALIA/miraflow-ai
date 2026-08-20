@@ -384,10 +384,10 @@ export default function Bento() {
                 ))}
               </ul>
               <Link
-                to={open.to}
+                to="/onboarding"
                 className="group mt-6 inline-flex items-center gap-2 rounded-full gradient-signature px-5 py-2.5 text-[14px] font-semibold text-white transition-all hover:-translate-y-0.5 hover:shadow-glow-iris"
               >
-                Essayer dans la démo
+                Essayer gratuitement
                 <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
               </Link>
             </motion.div>
