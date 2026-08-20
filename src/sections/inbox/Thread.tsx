@@ -7,14 +7,9 @@ import { GradientAvatar } from "../contacts/shared";
 import { cn } from "@/lib/utils";
 import AiSuggestionBanner from "./AiSuggestionBanner";
 
-const HAITHEM_PHONE_DIGITS = "21658746997";
-
-function normalizeDigits(raw: string): string {
-  return String(raw ?? "").replace(/\D/g, "");
-}
-
-function findHaithemSession(sessions: QrSession[]): QrSession | undefined {
-  return sessions.find((s) => s.phone && normalizeDigits(s.phone) === HAITHEM_PHONE_DIGITS && s.status === "connected");
+/** Première session réellement connectée (envoi), sinon la session de la conversation. */
+function findConnectedSession(sessions: QrSession[]): QrSession | undefined {
+  return sessions.find((s) => s.status === "connected");
 }
 
 export default function Thread({
@@ -47,7 +42,7 @@ export default function Thread({
   const rejectSuggestion = useSim((s) => s.rejectSuggestion);
   const deleteConversation = useSim((s) => s.deleteConversation);
 
-  const effectiveSendSession = findHaithemSession(allSessions) ?? session;
+  const effectiveSendSession = findConnectedSession(allSessions) ?? session;
 
   const handleDelete = async () => {
     if (!window.confirm("Voulez-vous supprimer définitivement cette conversation ?")) return;
@@ -96,7 +91,7 @@ export default function Thread({
       return false;
     }
     if (!effectiveSendSession?.id || effectiveSendSession.status !== "connected") {
-      toast.error("Session WhatsApp non connectée", { description: "Reconnecte la session QR HAITHEM avant d'envoyer." });
+      toast.error("Session WhatsApp non connectée", { description: "Reconnectez la session WhatsApp (QR) avant d'envoyer." });
       return false;
     }
 
@@ -138,7 +133,7 @@ export default function Thread({
     const body = draft.trim();
     if (!body || sending) return;
     setSending(true);
-    const ok = await doSendBody(body, effectiveSendSession?.name ?? "session HAITHEM");
+    const ok = await doSendBody(body, effectiveSendSession?.name ?? "session WhatsApp");
     setSending(false);
     if (ok) setDraft("");
   };
@@ -147,7 +142,7 @@ export default function Thread({
     const sug = suggestions.find((s) => s.id === suggestionId);
     if (!sug) return;
     acceptSuggestion(suggestionId);
-    void doSendBody(sug.text, `Agent IA · ${effectiveSendSession?.name ?? "HAITHEM"}`);
+    void doSendBody(sug.text, `Agent IA · ${effectiveSendSession?.name ?? "session WhatsApp"}`);
   };
 
   const handleSuggestionEdit = (_suggestionId: string, newText: string) => {
@@ -163,7 +158,7 @@ export default function Thread({
 
   const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
 
-  const usingHaithem = effectiveSendSession && session?.id !== effectiveSendSession.id;
+  const usingSharedSession = effectiveSendSession && session?.id !== effectiveSendSession.id;
 
   return (
     <div className="flex h-full flex-col">
@@ -177,8 +172,8 @@ export default function Thread({
         <div className="min-w-0 flex-1">
           <div className="font-bold text-hi">{contact?.name ?? `Conversation ${conv.id}`}</div>
           <div className="text-xs text-mid">
-            {contact?.phone ?? "numéro inconnu"} · {usingHaithem
-              ? <span className="text-iris font-semibold">HAITHEM KALIA · +216 58 746 997</span>
+            {contact?.phone ?? "numéro inconnu"} · {usingSharedSession
+              ? <span className="text-iris font-semibold">{effectiveSendSession.name}{effectiveSendSession.phone ? ` · ${effectiveSendSession.phone}` : ""}</span>
               : session ? `${session.name} (${session.status})` : "aucune session"}
           </div>
         </div>
@@ -189,7 +184,7 @@ export default function Thread({
               canSendReal ? "bg-mint/10 text-mint" : "bg-amber/10 text-amber",
             )}
           >
-            {canSendReal ? (usingHaithem ? "Route HAITHEM" : "Bridge réel") : "Envoi bloqué"}
+            {canSendReal ? (usingSharedSession ? "Session partagée" : "Bridge réel") : "Envoi bloqué"}
           </span>
           <button
             onClick={handleDelete}
@@ -231,10 +226,10 @@ export default function Thread({
       <div className="border-t border-line bg-surface-1 p-3">
         <div className="mb-2 text-[11px] text-low">
           {canSendReal
-            ? usingHaithem
-              ? "✅ Tous les envois (manuel + IA) passent par la session HAITHEM KALIA · +216 58 746 997."
+            ? usingSharedSession
+              ? `✅ Tous les envois (manuel + IA) passent par la session ${effectiveSendSession.name}${effectiveSendSession.phone ? ` · ${effectiveSendSession.phone}` : ""}.`
               : "Les messages envoyés ici partent via le bridge WhatsApp réel."
-            : "⚠️ Connectez d'abord la session HAITHEM KALIA (+216 58 746 997) pour autoriser les envois."}
+            : "⚠️ Connectez d'abord une session WhatsApp pour autoriser les envois."}
         </div>
         <div className="flex items-end gap-2">
           <textarea
