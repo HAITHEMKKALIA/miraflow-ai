@@ -201,7 +201,7 @@ function jidToPhone(raw) {
   const beforeAt = String(raw ?? "").split("@")[0];
   if (!beforeAt) return "";
 
-  const segments = beforeAt.split(/[:\\-_.]/);
+  const segments = beforeAt.split(/[:\-_.]/);
   for (const seg of segments) {
     const digits = String(seg).replace(/\D/g, "");
     if (looksLikeValidPhone(digits)) {
