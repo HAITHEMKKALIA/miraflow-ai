@@ -2,7 +2,7 @@
  * Composer — barre de réponse (inbox.md S2d). Textarea auto-grandissante,
  * palette « / » de réponses enregistrées (variables {{…}} auto-remplies),
  * emoji picker, menu pièces jointes (image/document/audio/carrousel),
- * bouton envoyer ⇄ micro (dictée simulée), brouillon persisté par
+ * bouton envoyer ⇄ micro (dictée Web Speech API), brouillon persisté par
  * conversation, bandeau réponse citée, état résolu / session déconnectée.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -229,14 +229,36 @@ export default function Composer({
     }
   };
 
+  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+
+  /* Dictée réelle via Web Speech API (si supportée par le navigateur). */
   const startDictation = () => {
     if (dictating) return;
-    setDictating(true);
-    setTimeout(() => {
+    const SR = (window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any })
+      .SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: new () => any }).webkitSpeechRecognition;
+    if (!SR) {
+      toast.info("Dictée non supportée", { description: "Votre navigateur ne propose pas la reconnaissance vocale." });
+      return;
+    }
+    const rec = new SR();
+    rec.lang = "fr-FR";
+    rec.interimResults = false;
+    rec.onresult = (e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => {
+      const transcript = e.results[0]?.[0]?.transcript ?? "";
+      if (transcript) setValue((v) => (v ? v + " " : "") + transcript);
+    };
+    rec.onend = () => setDictating(false);
+    rec.onerror = () => {
       setDictating(false);
-      setValue((v) => (v ? v + " " : "") + "Bonjour, je voulais un renseignement sur le coffret Aid.");
-      toast.success("Dictée terminée");
-    }, 2200);
+      toast.error("Dictée interrompue", { description: "Vérifiez l'accès au microphone." });
+    };
+    recognitionRef.current = rec;
+    setDictating(true);
+    try {
+      rec.start();
+    } catch {
+      setDictating(false);
+    }
   };
 
   const emojiList = useMemo(() => {

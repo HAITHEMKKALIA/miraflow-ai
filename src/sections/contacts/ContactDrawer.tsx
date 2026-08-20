@@ -196,10 +196,10 @@ function DrawerBody({ contact, conversations, onClose, onMessage, onDelete }: {
                 className="flex items-center gap-1.5 rounded-r-sm gradient-signature px-3 py-1.5 text-[12px] font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95">
                 <MessageSquare className="size-3.5" /> Message
               </button>
-              <button type="button" onClick={() => toast.info("Appel simulé", { description: `Appel de ${effective.name}…` })}
+              <a href={`tel:${effective.phone.replace(/\s/g, "")}`}
                 className="flex items-center gap-1.5 rounded-r-sm border border-line bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-mid hover:bg-surface-3 hover:text-hi">
                 <Phone className="size-3.5" /> Appeler
-              </button>
+              </a>
               <button type="button" onClick={() => setConfirmDel(true)} aria-label="Plus d'actions"
                 className="flex size-8 items-center justify-center rounded-r-sm border border-line bg-surface-2 text-mid hover:bg-surface-3 hover:text-hi">
                 <MoreHorizontal className="size-4" />
