@@ -1,10 +1,10 @@
 /**
- * ImportCsvModal — import CSV simulé en 3 étapes (contacts.md S6).
- * 1) Fichier : dropzone + téléchargement d'un modèle réel + aperçu 5 lignes.
+ * ImportCsvModal — import CSV réel en 3 étapes (contacts.md S6).
+ * 1) Fichier : dropzone + téléchargement d'un modèle (en-têtes) + aperçu.
  * 2) Mapping : colonnes → champs MiraFlow avec auto-détection + ignorer 1re ligne.
- * 3) Traitement : barre 0→100 (2.5s) → rapport 128 valides / 7 rejetés /
- *    12 doublons (count-up) + table des rejetés téléchargeable + import réel
- *    des contacts dans le CRM (confettis + toast).
+ * 3) Traitement : validation réelle des lignes (numéros, doublons) → rapport
+ *    valides / rejetés / doublons + table des rejetés téléchargeable + import
+ *    réel des contacts dans le CRM (confettis + toast).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -12,59 +12,19 @@ import {
   Check, CheckCircle2, Download, FileSpreadsheet, Loader2, UploadCloud, X, XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Contact, CrmStage } from "@/lib/sim/store";
+import type { Contact } from "@/lib/sim/store";
 import { newContactId } from "./crmStore";
 import { cn } from "@/lib/utils";
 
-/* ── Données d'exemple (import réaliste) ────────────────────────────────── */
-const FIRST = ["Sami", "Rania", "Mehdi", "Yasmine", "Nadia", "Karim", "Salma", "Olfa", "Hichem", "Mariem", "Camille", "Hugo", "Chloé", "Antoine", "Manon", "Emma", "Ines", "Selma", "Asma", "Leïla"];
-const LAST = ["Ben Ali", "Trabelsi", "Gharbi", "Mansour", "Haddad", "Cherif", "Ayari", "Kacem", "Sfar", "Jelassi", "Martin", "Bernard", "Moreau", "Roux", "Faure", "Girard"];
-const CITIES = ["Tunis", "Sfax", "Sousse", "Ariana", "Nabeul", "Lyon", "Paris", "Marseille"];
-const TAGS = [["VIP"], ["Nouveau"], ["Instagram"], ["Boutique"], ["Livraison"], ["Fidèle"], []];
-const STAGES: CrmStage[] = ["prospect", "interested", "client", "loyal"];
-
+/* ── Utilitaire déterministe (confettis) ────────────────────────────────── */
 function hash(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;
 }
-function generateContacts(count: number, tag: string): Contact[] {
-  const out: Contact[] = [];
-  const used = new Set<string>();
-  for (let i = 0; i < count; i++) {
-    let name = "";
-    let k = 0;
-    do {
-      const h = hash(`${tag}_${i}_${k++}`);
-      name = `${FIRST[h % FIRST.length]} ${LAST[(h >> 3) % LAST.length]}`;
-    } while (used.has(name));
-    used.add(name);
-    const h = hash(name + i);
-    const tn = h % 10 < 7;
-    out.push({
-      id: newContactId(),
-      name,
-      phone: tn ? `+216 ${20 + (h % 79)} ${100 + (h % 899)} ${100 + ((h >> 4) % 899)}` : `+33 6 ${10 + (h % 89)} ${10 + ((h >> 3) % 89)} ${10 + ((h >> 5) % 89)} ${10 + ((h >> 7) % 89)}`,
-      city: CITIES[h % CITIES.length],
-      tags: TAGS[h % TAGS.length],
-      score: 12 + (h % 85),
-      stage: STAGES[h % STAGES.length],
-      consent: h % 10 < 8,
-      lastContactAt: Date.now(),
-    });
-  }
-  return out;
-}
 
-const SAMPLE_CSV = [
-  ["nom", "telephone", "ville", "tags", "email"],
-  ["Sami Ben Ali", "+216 98 412 307", "Tunis", "VIP", "sami.benali@gmail.com"],
-  ["Rania Gharbi", "+216 55 903 118", "Sfax", "Nouveau", "rania.gharbi@outlook.fr"],
-  ["Camille Moreau", "+33 6 12 34 56 78", "Lyon", "Instagram", "camille.moreau@gmail.com"],
-  ["Mehdi Mansour", "+216 29 771 602", "Sousse", "Boutique", "mehdi.mansour@gmail.com"],
-  ["Chloé Faure", "+33 6 98 76 54 32", "Paris", "VIP;Fidèle", "chloe.faure@outlook.fr"],
-  ["Karim Haddad", "+216 98 112 445", "Tunis", "Livraison", "karim.haddad@gmail.com"],
-];
+/** Modèle CSV vierge : uniquement la ligne d'en-têtes. */
+const TEMPLATE_HEADER = ["nom", "telephone", "ville", "tags", "email"];
 
 type Field = "ignore" | "name" | "phone" | "city" | "tags" | "email";
 const FIELD_LABELS: Record<Field, string> = {
@@ -80,15 +40,8 @@ function detectField(header: string): Field {
   return "ignore";
 }
 
-const REJECTED = [
-  { line: 14, value: "+216 12 34", reason: "Numéro trop court" },
-  { line: 27, value: "telephone", reason: "Numéro invalide" },
-  { line: 33, value: "+33 6 11", reason: "Format incorrect" },
-  { line: 58, value: "(sans numéro)", reason: "Téléphone manquant" },
-  { line: 71, value: "+216 99 000 00", reason: "Numéro invalide" },
-  { line: 96, value: "06 12 34", reason: "Indicatif manquant" },
-  { line: 120, value: "+216 55", reason: "Numéro trop court" },
-];
+export interface RejectedLine { line: number; value: string; reason: string }
+
 
 export interface ImportCsvModalProps {
   open: boolean;
@@ -149,13 +102,9 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
     reader.readAsText(f);
   };
 
-  const loadSample = () => {
-    parseCsv(SAMPLE_CSV.map((r) => r.join(";")).join("\n"), "contacts_exemple.csv");
-  };
-
   const downloadTemplate = () => {
-    const csv = SAMPLE_CSV.map((r) => r.join(";")).join("\n");
-    const blob = new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" });
+    const csv = TEMPLATE_HEADER.join(";");
+    const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -166,8 +115,8 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
   };
 
   const downloadRejected = () => {
-    const csv = ["ligne;valeur;raison", ...REJECTED.map((r) => `${r.line};${r.value};${r.reason}`)].join("\n");
-    const blob = new Blob([`﻿${csv}`], { type: "text/csv;charset=utf-8" });
+    const csv = ["ligne;valeur;raison", ...parsed.rejected.map((r) => `${r.line};${r.value};${r.reason}`)].join("\n");
+    const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -176,7 +125,7 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
     URL.revokeObjectURL(url);
   };
 
-  /* Étape 3 : traitement simulé */
+  /* Étape 3 : traitement (barre de progression de validation) */
   useEffect(() => {
     if (step !== 3) return;
     setProgress(0);
@@ -196,11 +145,59 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
   const preview = dataRows.slice(0, 5);
   const headers = rows[0] ?? [];
 
+  /* Analyse réelle du fichier : validation des numéros + dédup par téléphone. */
+  const parsed = useMemo(() => {
+    const contacts: Contact[] = [];
+    const rejected: RejectedLine[] = [];
+    let duplicates = 0;
+    if (!rows.length) return { contacts, rejected, duplicates };
+    const idx = (f: Field) => mapping.indexOf(f);
+    const iName = idx("name");
+    const iPhone = idx("phone");
+    const iCity = idx("city");
+    const iTags = idx("tags");
+    const seen = new Set<string>();
+    dataRows.forEach((r, i) => {
+      const line = i + (skipFirst ? 2 : 1);
+      const name = (iName >= 0 ? r[iName] : "")?.trim() ?? "";
+      const phoneRaw = (iPhone >= 0 ? r[iPhone] : "")?.trim() ?? "";
+      const digits = phoneRaw.replace(/\D/g, "");
+      if (!name) {
+        rejected.push({ line, value: phoneRaw || "(vide)", reason: "Nom manquant" });
+        return;
+      }
+      if (!phoneRaw) {
+        rejected.push({ line, value: name, reason: "Téléphone manquant" });
+        return;
+      }
+      if (digits.length < 8) {
+        rejected.push({ line, value: phoneRaw, reason: "Numéro invalide" });
+        return;
+      }
+      if (seen.has(digits)) {
+        duplicates += 1;
+        return;
+      }
+      seen.add(digits);
+      contacts.push({
+        id: newContactId(),
+        name,
+        phone: phoneRaw.startsWith("+") ? phoneRaw : `+${digits}`,
+        city: iCity >= 0 ? (r[iCity] ?? "").trim() : "",
+        tags: iTags >= 0 ? (r[iTags] ?? "").split(/[|/]/).map((t) => t.trim()).filter(Boolean) : [],
+        score: 0,
+        stage: "prospect",
+        consent: false,
+        lastContactAt: Date.now(),
+      });
+    });
+    return { contacts, rejected, duplicates };
+  }, [rows, dataRows, mapping, skipFirst]);
+
   const doImport = () => {
-    const list = generateContacts(128, fileName || "import");
-    onImport(list);
+    onImport(parsed.contacts);
     setImported(true);
-    toast.success("128 contacts importés", { description: "Ils apparaissent maintenant dans la table." });
+    toast.success(`${parsed.contacts.length} contacts importés`, { description: "Ils apparaissent maintenant dans la table." });
   };
 
   const STEPS = ["Fichier", "Mapping", "Traitement"];
@@ -280,9 +277,7 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
                         className="flex items-center gap-1.5 rounded-r-sm border border-line bg-surface-2 px-3 py-2 text-[12px] font-medium text-mid transition-colors hover:bg-surface-3 hover:text-hi">
                         <Download className="size-3.5" /> Télécharger un modèle
                       </button>
-                      <button type="button" onClick={loadSample} className="text-[12px] font-medium text-iris hover:underline">
-                        Utiliser un fichier d'exemple →
-                      </button>
+
                     </div>
                   </motion.div>
                 )}
@@ -375,9 +370,9 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
                       <div>
                         <div className="grid grid-cols-3 gap-3">
                           {[
-                            { label: "Valides", value: 128, tone: "mint", icon: <CheckCircle2 className="size-5" /> },
-                            { label: "Rejetés", value: 7, tone: "rose", icon: <XCircle className="size-5" /> },
-                            { label: "Doublons", value: 12, tone: "amber", icon: <Loader2 className="size-5" /> },
+                            { label: "Valides", value: parsed.contacts.length, tone: "mint", icon: <CheckCircle2 className="size-5" /> },
+                            { label: "Rejetés", value: parsed.rejected.length, tone: "rose", icon: <XCircle className="size-5" /> },
+                            { label: "Doublons", value: parsed.duplicates, tone: "amber", icon: <Loader2 className="size-5" /> },
                           ].map((c, i) => (
                             <motion.div key={c.label} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.12 }}
                               className={cn("rounded-r-md border p-4 text-center",
@@ -396,12 +391,17 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
                         <div className="mt-4 rounded-r-md border border-line">
                           <div className="flex items-center justify-between border-b border-line px-3 py-2">
                             <p className="label-micro text-low">Lignes rejetées</p>
-                            <button type="button" onClick={downloadRejected} className="flex items-center gap-1 text-[11px] font-medium text-iris hover:underline">
-                              <Download className="size-3" /> Télécharger
-                            </button>
+                            {parsed.rejected.length > 0 && (
+                              <button type="button" onClick={downloadRejected} className="flex items-center gap-1 text-[11px] font-medium text-iris hover:underline">
+                                <Download className="size-3" /> Télécharger
+                              </button>
+                            )}
                           </div>
                           <div className="max-h-[150px] overflow-y-auto">
-                            {REJECTED.map((r) => (
+                            {parsed.rejected.length === 0 && (
+                              <p className="px-3 py-2 text-[12px] text-low">Aucune ligne rejetée.</p>
+                            )}
+                            {parsed.rejected.map((r) => (
                               <div key={r.line} className="flex items-center justify-between border-b border-line/40 px-3 py-1.5 text-[12px] last:border-0">
                                 <span className="font-mono tabular text-low">L.{r.line}</span>
                                 <span className="min-w-0 flex-1 truncate px-2 text-mid">{r.value}</span>
@@ -412,9 +412,9 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
                         </div>
 
                         <div className="mt-5 flex justify-end">
-                          <button type="button" onClick={doImport}
-                            className="rounded-r-sm gradient-signature px-4 py-2 text-[13px] font-semibold text-white shadow-glow-iris transition-transform hover:scale-[1.02] active:scale-95">
-                            Importer les 128 contacts
+                          <button type="button" onClick={doImport} disabled={parsed.contacts.length === 0}
+                            className="rounded-r-sm gradient-signature px-4 py-2 text-[13px] font-semibold text-white shadow-glow-iris transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-40">
+                            Importer les {parsed.contacts.length} contacts
                           </button>
                         </div>
                       </div>
@@ -426,7 +426,7 @@ export default function ImportCsvModal({ open, onClose, onImport }: ImportCsvMod
                           <Check className="size-8" />
                         </motion.span>
                         <p className="mt-4 font-display text-[18px] font-semibold text-hi">Import terminé !</p>
-                        <p className="mt-1 text-[13px] text-mid">128 contacts ajoutés · 12 doublons fusionnés · 7 rejetés.</p>
+                        <p className="mt-1 text-[13px] text-mid">{parsed.contacts.length} contacts ajoutés · {parsed.duplicates} doublons ignorés · {parsed.rejected.length} rejetés.</p>
                         <button type="button" onClick={onClose}
                           className="mt-5 rounded-r-sm gradient-signature px-5 py-2 text-[13px] font-semibold text-white transition-transform hover:scale-[1.02] active:scale-95">
                           Voir les contacts

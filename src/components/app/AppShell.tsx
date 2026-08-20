@@ -23,9 +23,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  Bell, Bot, ChevronDown, ChevronsLeft, ChevronsRight, Contact as ContactIcon,
-  Home, Inbox, LogOut, Megaphone, Menu, Moon, Search, Settings,
-  ShieldCheck, Sparkles, Sun, Workflow, X,
+  Bell, BookOpen, Bot, ChevronDown, ChevronsLeft, ChevronsRight, Contact as ContactIcon,
+  Home, Inbox, LogOut, Megaphone, Menu, Moon, Package, Search, Settings,
+  ShieldCheck, ShoppingCart, Sparkles, Sun, Truck, Users, Workflow, X,
 } from "lucide-react";
 import { toast, Toaster } from "sonner";
 import {
@@ -38,6 +38,7 @@ import CommandPalette from "./CommandPalette";
 import BridgeInboxSync from "./BridgeInboxSync";
 import BridgeRuntimeBootstrap from "./BridgeRuntimeBootstrap";
 import AIOrchestrator from "@/sections/agents/AIOrchestrator";
+import { bootstrapCloud, signOutCloud } from "@/lib/cloud";
 import { cn } from "@/lib/utils";
 
 /* ── Navigation ─────────────────────────────────────────────────────────── */
@@ -54,7 +55,16 @@ const GROUPS: { key: string; items: NavItem[] }[] = [
       { to: "/app", key: "shell.dashboard", icon: Home, end: true },
       { to: "/app/inbox", key: "shell.inbox", icon: Inbox },
       { to: "/app/contacts", key: "shell.contacts", icon: ContactIcon },
+      { to: "/app/clients", key: "shell.customers", icon: Users },
       { to: "/app/campaigns", key: "shell.campaigns", icon: Megaphone },
+    ],
+  },
+  {
+    key: "shell.group.business",
+    items: [
+      { to: "/app/produits", key: "shell.products", icon: Package },
+      { to: "/app/commandes", key: "shell.orders", icon: ShoppingCart },
+      { to: "/app/livraisons", key: "shell.deliveries", icon: Truck },
     ],
   },
   {
@@ -62,6 +72,7 @@ const GROUPS: { key: string; items: NavItem[] }[] = [
     items: [
       { to: "/app/workflows", key: "shell.workflows", icon: Workflow },
       { to: "/app/agents", key: "shell.agents", icon: Bot },
+      { to: "/app/connaissances", key: "shell.knowledge", icon: BookOpen },
     ],
   },
   {
@@ -80,6 +91,11 @@ const TITLES: [RegExp, string, string[]][] = [
   [/^\/app\/campaigns/, "Campagnes", ["App", "Campagnes"]],
   [/^\/app\/workflows/, "Workflows", ["App", "Workflows"]],
   [/^\/app\/agents/, "Agents IA", ["App", "Agents IA"]],
+  [/^\/app\/produits/, "Produits", ["App", "Produits"]],
+  [/^\/app\/commandes/, "Commandes", ["App", "Commandes"]],
+  [/^\/app\/livraisons/, "Livraisons", ["App", "Livraisons"]],
+  [/^\/app\/clients/, "Clients", ["App", "Clients"]],
+  [/^\/app\/connaissances/, "Connaissances", ["App", "Connaissances"]],
   [/^\/app\/settings/, "Paramètres", ["App", "Paramètres"]],
   [/^\/admin/, "Super Admin", ["Plateforme"]],
 ];
@@ -217,6 +233,12 @@ export default function AppShell() {
     () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches,
   );
 
+  // Bootstrap cloud : si une session Supabase Auth existe, charge les données
+  // réelles de l'organisation dans le store (sinon : espace local, sans mock).
+  useEffect(() => {
+    void bootstrapCloud();
+  }, []);
+
   // Suivi du breakpoint desktop/mobile
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -287,6 +309,7 @@ export default function AppShell() {
   /** Déconnexion réelle : ferme la session owner/tenant puis retour accueil. */
   const logout = () => {
     if (isOwnerAuthed()) ownerLogout();
+    void signOutCloud();
     try {
       localStorage.removeItem("mf:tenant-session");
     } catch {
