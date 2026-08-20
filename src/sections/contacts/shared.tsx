@@ -6,9 +6,10 @@
  * historique) — le SimEngine ne porte que les champs de base.
  */
 import type { Contact, CrmStage } from "@/lib/sim/store";
+import { useSim } from "@/lib/sim/store";
 import { cn } from "@/lib/utils";
 
-/* ── PRNG déterministe (par contact) ────────────────────────────────────── */
+/* ── Hash stable (avatar dégradé par contact) ───────────────────────────── */
 function hashStr(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -16,16 +17,6 @@ function hashStr(s: string): number {
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
-}
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
 }
 
 /* ── Initiales + avatar dégradé ─────────────────────────────────────────── */
@@ -245,131 +236,69 @@ export interface ContactProfile {
   history: HistoryItem[];
 }
 
-const AUTHORS = ["Amira", "Youssef", "Ines", "Karim"];
-const ORDER_ITEMS = [
-  "Coffret Aid", "Baklava pistache 500g", "Makroudh ×12", "Pièce montée",
-  "Corne de gazelle ×20", "Coffret découverte", "Gâteau anniversaire", "Samsa ×10",
-];
-const NOTE_TEXTS = [
-  "Préfère être contacté le soir.",
-  "Très intéressé par les coffrets entreprise.",
-  "A demandé une facture au nom de la société.",
-  "Cliente fidèle, toujours satisfaite.",
-  "Attend un devis pour un mariage.",
-  "Sensible au sans gluten.",
-];
-const CAMPAIGN_NAMES = ["Offre Aid", "Nouveautés Ramadan", "VIP Fidélité", "Relance paniers"];
-
 const MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
-const profileCache = new Map<string, ContactProfile>();
-
+/**
+ * Profil dérivé exclusivement des données réelles : champs du contact +
+ * commandes du store (module Commandes). Aucune donnée fabriquée — les
+ * champs inconnus (email, anniversaire) restent vides et les collections
+ * (notes, historique) démarrent vides ; les mutations passent par crmStore.
+ */
 export function getProfile(c: Contact): ContactProfile {
-  const cached = profileCache.get(c.id);
-  if (cached) return cached;
-  const rnd = mulberry32(hashStr(c.id));
-  const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(rnd() * arr.length)];
-  const int = (min: number, max: number) => min + Math.floor(rnd() * (max - min + 1));
-
-  const first = c.name.split(" ")[0]?.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "") ?? "contact";
-  const last = (c.name.split(" ")[1] ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
-  const email = `${first}.${last || "client"}@${rnd() > 0.5 ? "gmail.com" : "outlook.fr"}`;
   const tn = c.phone.startsWith("+216");
   const currency: "TND" | "EUR" = tn ? "TND" : "EUR";
 
-  const sinceTs = Date.now() - int(60, 420) * DAY;
+  const sinceTs = c.lastContactAt || Date.now();
   const sd = new Date(sinceTs);
   const since = `${MONTHS[sd.getMonth()]} ${sd.getFullYear()}`;
-  const bMonth = int(0, 11);
-  const bDay = int(1, 28);
-  const birthday = `${bDay} ${MONTHS[bMonth]}`;
 
-  const factors = [
-    { label: "Répond vite", pts: int(15, 30) },
-    { label: "Achat récent", pts: int(12, 25) },
-    { label: "Ouvertures campagnes", pts: int(8, 20) },
-  ];
-
-  const mk = (base: boolean, viaM: string, daysAgo: number): Consent => ({
-    granted: base,
-    at: Date.now() - daysAgo * DAY,
-    via: viaM,
-  });
-  const consents = {
-    marketing: mk(c.consent, pick(["import CSV", "formulaire boutique", "opt-in WhatsApp"]), int(20, 180)),
-    transactional: mk(true, "automatique", int(20, 180)),
-    data: mk(rnd() > 0.2, "paramètres", int(60, 200)),
-  };
-
-  const nOrders = int(1, 3);
-  const orders: Order[] = [];
-  let totalOrders = 0;
-  for (let i = 0; i < nOrders; i++) {
-    const qty = int(1, 3);
-    const unit = int(12, 90);
-    const amount = unit * qty;
-    totalOrders += amount;
-    orders.push({
-      id: `${c.id}_o${i}`,
-      label: pick(ORDER_ITEMS),
-      qty,
-      amount,
-      currency,
-      at: Date.now() - int(2, 90) * DAY,
-    });
-  }
+  // Commandes réelles du store rattachées au contact (par nom client).
+  const realOrders = useSim.getState().orders.filter((o) => o.customerName === c.name);
+  const orders: Order[] = realOrders.map((o) => ({
+    id: o.id,
+    label:
+      o.items
+        .map((it) => (it.quantity > 1 ? `${it.productName} ×${it.quantity}` : it.productName))
+        .join(", ") || o.orderNumber,
+    qty: o.items.reduce((acc, it) => acc + it.quantity, 0),
+    amount: o.total,
+    currency: "TND",
+    at: o.createdAt,
+  }));
   orders.sort((a, b) => b.at - a.at);
+  const totalOrders = orders.reduce((acc, o) => acc + o.amount, 0);
 
-  const notes: Note[] = [];
-  const nNotes = int(1, 3);
-  for (let i = 0; i < nNotes; i++) {
-    notes.push({
-      id: `${c.id}_n${i}`,
-      author: pick(AUTHORS),
-      at: Date.now() - int(1, 40) * DAY,
-      text: pick(NOTE_TEXTS),
-    });
-  }
-  notes.sort((a, b) => b.at - a.at);
+  const consents = {
+    marketing: { granted: c.consent, at: sinceTs, via: "WhatsApp" },
+    transactional: { granted: true, at: sinceTs, via: "automatique" },
+    data: { granted: true, at: sinceTs, via: "paramètres" },
+  };
 
   const history: HistoryItem[] = [
     { id: `${c.id}_h0`, at: sinceTs, kind: "import", text: "Premier contact enregistré" },
-    { id: `${c.id}_h1`, at: consents.marketing.at, kind: "consent", text: `Consentement marketing ${consents.marketing.granted ? "accordé" : "refusé"} via ${consents.marketing.via}` },
-    ...orders.map((o, i) => ({
-      id: `${c.id}_ho${i}`,
+    ...orders.map((o) => ({
+      id: `${c.id}_ho_${o.id}`,
       at: o.at,
       kind: "order" as const,
       text: `Commande ${o.label} — ${o.amount.toLocaleString("fr-FR")} ${o.currency}`,
     })),
-    ...CAMPAIGN_NAMES.slice(0, int(1, 3)).map((n, i) => ({
-      id: `${c.id}_hc${i}`,
-      at: Date.now() - int(5, 70) * DAY,
-      kind: "campaign" as const,
-      text: `Campagne « ${n} » reçue · lue`,
-    })),
   ];
   history.sort((a, b) => b.at - a.at);
 
-  // Dernière activité : la plupart récente, ~20% au-delà de 90 j (segment Inactifs)
-  const lastActiveTs = rnd() > 0.8 ? Date.now() - int(91, 150) * DAY : Date.now() - int(1, 72) * HOUR;
-  const abandonedCart = rnd() > 0.72;
-
-  const profile: ContactProfile = {
-    email,
-    birthday,
-    lang: tn && rnd() > 0.5 ? "AR" : "FR",
+  return {
+    email: "",
+    birthday: "",
+    lang: "FR",
     since,
     sinceTs,
-    lastActiveTs,
-    abandonedCart,
-    scoreFactors: factors,
+    lastActiveTs: c.lastContactAt || sinceTs,
+    abandonedCart: false,
+    scoreFactors: [],
     consents,
     orders,
     totalOrders,
     currency,
-    notes,
+    notes: [],
     history,
   };
-  profileCache.set(c.id, profile);
-  return profile;
 }
