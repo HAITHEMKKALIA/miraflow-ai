@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { Globe, QrCode, RefreshCcw, Save, Trash2, Plus } from "lucide-react";
+import { Globe, QrCode, RefreshCcw, Save, Trash2, Plus, Unplug } from "lucide-react";
 import { toast } from "sonner";
-import { bridgeHealth, getBridgeUrl, setBridgeUrl, createSession, deleteBridgeSession, persistBridgeSession } from "@/lib/bridge";
-import { useSim, useSessions } from "@/lib/sim/store";
+import { bridgeHealth, getBridgeUrl, setBridgeUrl, createSession, deleteBridgeSession, logoutSession, isBridgeConfigured, persistBridgeSession } from "@/lib/bridge";
+import { sessionQuota, useSim, useSessions, type QrSession } from "@/lib/sim/store";
+import QuotaReachedDialog from "@/components/app/QuotaReachedDialog";
+import ConfirmDialog from "@/components/ui-shared/ConfirmDialog";
 import { ActionButton, Field, SectionCard, StatusBadge, TextInput } from "./ui";
+import CloudGate from "@/components/app/CloudGate";
 
 export default function SessionsTab() {
   const sessions = useSessions();
@@ -13,6 +16,10 @@ export default function SessionsTab() {
   const [bridgeOk, setBridgeOk] = useState<boolean | null>(null);
   const [newSessionId, setNewSessionId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<QrSession | null>(null);
+  const disconnectSession = useSim((s) => s.disconnectSession);
+  const removeSession = useSim((s) => s.removeSession);
 
   const connectedCount = useMemo(
     () => sessions.filter((item) => item.status === "connected").length,
@@ -34,6 +41,12 @@ export default function SessionsTab() {
 
   const handleCreateSession = async () => {
     if (!newSessionId.trim()) return toast.error("Entrez un ID de session");
+    // Contrôle quota WhatsApp (§20) avant création côté bridge
+    const plan = useSim.getState().org.plan;
+    if (sessions.length >= sessionQuota(plan)) {
+      setQuotaOpen(true);
+      return;
+    }
     setCreating(true);
     try {
       await createSession(newSessionId);
@@ -44,6 +57,35 @@ export default function SessionsTab() {
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleDisconnect = async (session: QrSession) => {
+    // Best effort côté bridge : on ne bloque pas si injoignable
+    if (isBridgeConfigured()) {
+      try {
+        await logoutSession(session.id);
+      } catch {
+        /* bridge injoignable — on déconnecte quand même localement */
+      }
+    }
+    disconnectSession(session.id);
+    toast.success("Session déconnectée");
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    const target = pendingDelete;
+    // Déconnexion best effort côté bridge avant suppression locale
+    if (isBridgeConfigured()) {
+      try {
+        await logoutSession(target.id);
+      } catch {
+        /* bridge injoignable — suppression locale quand même */
+      }
+      await deleteBridgeSession(target.id);
+    }
+    removeSession(target.id);
+    toast.success("Session supprimée");
   };
 
   const updateType = async (sessionId: string, newType: string) => {
@@ -62,6 +104,7 @@ export default function SessionsTab() {
   };
 
   return (
+    <CloudGate>
     <div className="space-y-5">
       <SectionCard
         title="Pont WhatsApp"
@@ -117,15 +160,20 @@ export default function SessionsTab() {
                 <StatusBadge tone="low">Uptime {session.uptime}%</StatusBadge>
                 <button
                   type="button"
-                  onClick={async () => {
-                    const ok = await deleteBridgeSession(session.id);
-                    if (ok) {
-                      toast.success("Session supprimée");
-                    } else {
-                      toast.error("Erreur lors de la suppression de la session réseau");
-                    }
-                  }}
-                  className="ml-2 inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 hover:text-rose-600 transition-colors"
+                  onClick={() => void handleDisconnect(session)}
+                  disabled={session.status === "disconnected"}
+                  title={session.status === "disconnected" ? "Session déjà déconnectée" : "Déconnecter cette session WhatsApp"}
+                  className="ml-2 inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-amber-500 hover:bg-amber-500/10 hover:text-amber-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <Unplug className="size-3.5" />
+                  Déconnecter
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPendingDelete(session)}
+                  disabled={sessions.length <= 1}
+                  title={sessions.length <= 1 ? "Impossible de supprimer la dernière session restante" : "Supprimer définitivement cette session"}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-xs font-semibold text-rose-500 hover:bg-rose-500/10 hover:text-rose-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                 >
                   <Trash2 className="size-3.5" />
                   Supprimer
@@ -144,6 +192,27 @@ export default function SessionsTab() {
           </ActionButton>
         </div>
       </SectionCard>
+
+      <QuotaReachedDialog
+        open={quotaOpen}
+        current={sessions.length}
+        onClose={() => setQuotaOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => void handleDeleteConfirm()}
+        title="Supprimer la session"
+        description={
+          pendingDelete
+            ? `Supprimer définitivement la session « ${pendingDelete.name} » ? Cette action est irréversible.`
+            : undefined
+        }
+        confirmLabel="Supprimer"
+        icon={<Trash2 className="size-5" />}
+      />
     </div>
+    </CloudGate>
   );
 }
