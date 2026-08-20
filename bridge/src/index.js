@@ -22,17 +22,46 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
+import {
+  DEFAULT_ORG_ID,
+  HAITHEM_PHONE_DIGITS,
+  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_URL,
+  bridgeIdFromSessionRow,
+  findAnyOrgId,
+  findOrgId,
+  formatPhone,
+  getEntry,
+  getMessageText,
+  isValidRemoteJid,
+  jidToPhone,
+  jidToPhoneWithFallback,
+  logger,
+  mapSessionStatus,
+  normalizeContactStage,
+  normalizeDigits,
+  persistRuntimeCampaign,
+  persistRuntimeContact,
+  persistRuntimeMessage,
+  persistRuntimeSession,
+  persistRuntimeWaMessage,
+  phoneToValidRemoteJid,
+  pushEvent,
+  remoteJidToPhoneCanonical,
+  resolveSendJid,
+  sessions,
+  supabaseRest,
+  toCampaignStatus,
+  toMs,
+  typeFromSessionRow,
+} from "./shared.js";
+import { AI_PROVIDER, GROQ_API_KEY, autoWakeSessions, initAi } from "./ai.js";
+import { processIncomingMessageForCampainsAndAI, tickCampaigns } from "./campaigns.js";
 
 const PORT = Number(process.env.PORT || 3100);
 const AUTH_DIR = process.env.AUTH_DIR || path.resolve("./auth");
 // Quota multi-tenant (section 20) : 0 = illimité
 const MAX_SESSIONS_PER_ORG = Number(process.env.MAX_SESSIONS_PER_ORG || 0);
-// Organisation par défaut quand le client n'en précise pas (rétro-compatibilité API)
-const DEFAULT_ORG_ID = "default";
-const SUPABASE_URL = String(process.env.SUPABASE_URL || "https://yifjcvwhmdycpsvldlzo.supabase.co").replace(/\/+$/, "");
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
-
-const logger = pino({ level: process.env.LOG_LEVEL || "info" });
 
 // ============ DIAGNOSTIC DÉMARRAGE ============
 setTimeout(async () => {
@@ -75,781 +104,6 @@ setTimeout(async () => {
   } catch (_) { /* ignore */ }
   logger.info({ sessions: configuredSessions }, `[BOOT] ${configuredSessions.length} dossier(s) d'autorisation trouvés dans ${AUTH_DIR}`);
 }, 500);
-
-/** @typedef {"qr_pending"|"connecting"|"connected"|"disconnected"} Status */
-
-/**
- * sessions en mémoire :
- * Map<sessionId, { status, qr?, phone?, pushname?, sock?, retryCount, events? }>
- */
-const sessions = new Map();
-
-const phoneToValidRemoteJid = new Map();
-const remoteJidToPhoneCanonical = new Map();
-
-function isValidRemoteJid(jid) {
-  const s = String(jid ?? "");
-  if (!s) return false;
-  if (s.endsWith("@g.us") || s === "status@broadcast") return false;
-  if (s.endsWith("@s.whatsapp.net")) return true;
-  if (s.endsWith("@lid")) return true;
-  return false;
-}
-
-function registerJidPhonePairing(jid, phoneDigits) {
-  if (!isValidRemoteJid(jid)) return;
-  const key = normalizeDigits(phoneDigits);
-  if (!key) return;
-  phoneToValidRemoteJid.set(key, jid);
-  remoteJidToPhoneCanonical.set(String(jid).toLowerCase(), key);
-}
-
-function resolveSendJid(phone, preferredRemoteJid) {
-  if (preferredRemoteJid && isValidRemoteJid(preferredRemoteJid)) {
-    return preferredRemoteJid;
-  }
-  const key = normalizeDigits(phone);
-  if (key) {
-    const cached = phoneToValidRemoteJid.get(key);
-    if (cached && isValidRemoteJid(cached)) return cached;
-  }
-  const fallback = toJid(phone);
-  return fallback || "";
-}
-
-function looksLikeValidPhone(d) {
-  if (!d || d.length < 8 || d.length > 13) return false;
-  if (!/^[1-9]/.test(d)) return false;
-  if (d.startsWith("216") && d.length === 11) return true;
-  if (d.startsWith("33") && d.length === 11) return true;
-  if (d.startsWith("1") && d.length === 11 && /^1[2-9]/.test(d)) return true;
-  if (d.length === 8) return true;
-  return d.length >= 9 && d.length <= 13;
-}
-
-function extractValidPhoneSegment(digits) {
-  if (!digits) return "";
-  if (looksLikeValidPhone(digits)) return digits;
-
-  const candidates = [];
-  const len = digits.length;
-
-  for (let start = 0; start < len; start++) {
-    for (let end = start + 8; end <= Math.min(start + 13, len); end++) {
-      const seg = digits.slice(start, end);
-      if (looksLikeValidPhone(seg)) candidates.push({ seg, start, end });
-    }
-  }
-
-  if (candidates.length === 0) {
-    if (digits.length > 13) {
-      if (digits.startsWith("216")) return digits.slice(0, 11);
-      if (digits.startsWith("33")) return digits.slice(0, 11);
-      if (digits.startsWith("1") && /^1[2-9]/.test(digits)) return digits.slice(0, 11);
-    }
-    if (digits.length === 8) return `216${digits}`;
-    return "";
-  }
-
-  candidates.sort((a, b) => {
-    const aScore = (a.seg.startsWith("216") ? 100 : 0) + (a.seg.startsWith("33") ? 90 : 0) + (a.seg.startsWith("1") && a.seg.length === 11 ? 80 : 0) + (a.seg.length === 11 ? 30 : a.seg.length);
-    const bScore = (b.seg.startsWith("216") ? 100 : 0) + (b.seg.startsWith("33") ? 90 : 0) + (b.seg.startsWith("1") && b.seg.length === 11 ? 80 : 0) + (b.seg.length === 11 ? 30 : b.seg.length);
-    if (bScore !== aScore) return bScore - aScore;
-    return b.start - a.start;
-  });
-
-  return candidates[0].seg;
-}
-
-function normalizeDigits(raw) {
-  let digits = String(raw ?? "").replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("00")) digits = digits.slice(2);
-
-  if (digits.length > 11) {
-    if (digits.startsWith("216216")) digits = digits.slice(3);
-    else if (digits.startsWith("3333")) digits = digits.slice(2);
-    else if (/^11[2-9]/.test(digits)) digits = digits.slice(1);
-  }
-
-  const extracted = extractValidPhoneSegment(digits);
-  if (extracted) {
-    if (extracted.length === 8) return `216${extracted}`;
-    return extracted;
-  }
-
-  if (digits.length === 8) return `216${digits}`;
-  return digits;
-}
-
-function toJid(raw) {
-  const digits = normalizeDigits(raw);
-  return digits ? `${digits}@s.whatsapp.net` : "";
-}
-
-function formatPhone(raw) {
-  const digits = normalizeDigits(raw);
-  return digits ? `+${digits}` : "";
-}
-
-function jidToPhone(raw) {
-  // BUG FIX #1: Vérifier d'abord le cache des pairings JID↔Phone (essentiel pour @lid)
-  const rawLower = String(raw ?? "").toLowerCase();
-  const cached = remoteJidToPhoneCanonical.get(rawLower);
-  if (cached) return cached;
-
-  const beforeAt = String(raw ?? "").split("@")[0];
-  if (!beforeAt) return "";
-
-  const segments = beforeAt.split(/[:\-_.]/);
-  for (const seg of segments) {
-    const digits = String(seg).replace(/\D/g, "");
-    if (looksLikeValidPhone(digits)) {
-      if (digits.length === 8) return `216${digits}`;
-      return digits;
-    }
-  }
-
-  const fallback = normalizeDigits(segments[0] ?? beforeAt);
-  if (fallback) return fallback;
-
-  const allDigits = beforeAt.replace(/\D/g, "");
-  const extracted = extractValidPhoneSegment(allDigits);
-  if (extracted) {
-    return extracted.length === 8 ? `216${extracted}` : extracted;
-  }
-  return "";
-}
-
-/**
- * jidToPhoneWithFallback : résout phone depuis un JID même pour @lid inconnus.
- * Stratégie : cache → parsing classique → lookup DB par remote_jid.
- */
-async function jidToPhoneWithFallback(rawJid) {
-  const fromCache = jidToPhone(rawJid);
-  if (fromCache) return fromCache;
-
-  const jidLower = String(rawJid ?? "").toLowerCase();
-  if (!jidLower || !jidLower.includes("@")) return "";
-
-  // Si c'est un @lid non résolu par parsing, tenter un contact déjà persisté
-  if (jidLower.endsWith("@lid") && SUPABASE_SERVICE_ROLE_KEY) {
-    try {
-      const orgId = await findAnyOrgId();
-      if (orgId) {
-        const rows = await supabaseRest(
-          `/contacts?org_id=eq.${orgId}&remote_jid=eq.${encodeURIComponent(jidLower)}&select=id,phone&limit=1`
-        ).catch(() => []);
-        if (Array.isArray(rows) && rows[0]?.phone) {
-          const digits = normalizeDigits(rows[0].phone);
-          if (digits) {
-            // Remplir le cache pour les prochaines fois
-            remoteJidToPhoneCanonical.set(jidLower, digits);
-            phoneToValidRemoteJid.set(digits, String(rawJid ?? ""));
-            return digits;
-          }
-        }
-      }
-    } catch (_) { /* ignore DB errors here */ }
-  }
-  return "";
-}
-
-function toMs(value) {
-  const n = Number(value ?? Date.now());
-  if (!Number.isFinite(n)) return Date.now();
-  return n < 1_000_000_000_000 ? n * 1000 : n;
-}
-
-function getMessageText(message) {
-  if (!message) return "";
-  return String(
-    message.conversation
-    ?? message.extendedTextMessage?.text
-    ?? message.imageMessage?.caption
-    ?? message.videoMessage?.caption
-    ?? message.documentMessage?.caption
-    ?? message.buttonsResponseMessage?.selectedDisplayText
-    ?? message.listResponseMessage?.title
-    ?? message.templateButtonReplyMessage?.selectedDisplayText
-    ?? "",
-  ).trim();
-}
-
-function pushEvent(sessionId, event) {
-  if (!sessionId || !event?.id) return;
-  const entry = getEntry(sessionId);
-  const list = Array.isArray(entry.events) ? entry.events : [];
-  if (list.some((item) => String(item?.id ?? "") === String(event.id))) return;
-  // BUG FIX #7: receivedAt monotone (Date.now()) + fallback sur l'horodatage original WhatsApp (at)
-  // Évite de rater des messages dont le timestamp WhatsApp est dans le passé (appareil offline, etc.)
-  const now = Date.now();
-  const origAt = Number.isFinite(event.at) ? event.at : now;
-  const origReceived = Number.isFinite(event.receivedAt) ? event.receivedAt : now;
-  const stamped = { ...event, at: origAt, receivedAt: origReceived };
-  entry.events = [...list, stamped].slice(-250);
-  logger.debug(
-    { sessionId, eventId: stamped.id, type: stamped.type, direction: stamped.direction, at: stamped.at, receivedAt: stamped.receivedAt, listSize: entry.events.length },
-    "[EVENT] Event ajouté au buffer de session"
-  );
-}
-
-function orgSlug(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "org";
-}
-
-async function supabaseRest(endpoint, init = {}) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return [];
-
-  try {
-    const hasBody = init.body !== undefined && init.body !== null;
-    const headers = {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-      ...(hasBody ? { "Content-Type": "application/json" } : {}),
-      ...init.headers,
-    };
-    const response = await fetch(`${SUPABASE_URL}/rest/v1${endpoint}`, {
-      ...init,
-      headers,
-    });
-
-    if (!response.ok) {
-      logger.warn({ endpoint, status: response.status, body: await response.text().catch(() => "") }, "supabase rest rejected request");
-      return [];
-    }
-
-    if (response.status === 204) return [];
-    const text = await response.text();
-    if (!text) return [];
-    try { return JSON.parse(text); }
-    catch { return []; }
-  } catch (err) {
-    logger.warn({ endpoint, err }, "supabase rest request failed");
-    return [];
-  }
-}
-
-async function findOrgId(orgName) {
-  const slug = orgSlug(orgName);
-  const exact = await supabaseRest(`/organizations?slug=eq.${encodeURIComponent(slug)}&select=id,name,slug&limit=1`);
-  if (Array.isArray(exact) && exact[0]?.id) return exact[0].id;
-
-  const byName = await supabaseRest(`/organizations?name=ilike.${encodeURIComponent(`*${String(orgName ?? "").trim()}*`)}&select=id,name,slug&limit=1`);
-  if (Array.isArray(byName) && byName[0]?.id) return byName[0].id;
-
-  const single = await supabaseRest("/organizations?select=id,name,slug&order=created_at.asc&limit=2");
-  if (Array.isArray(single) && single.length === 1 && single[0]?.id) return single[0].id;
-
-  return null;
-}
-
-let CACHED_ANY_ORG_ID = null;
-async function findAnyOrgId() {
-  if (CACHED_ANY_ORG_ID) return CACHED_ANY_ORG_ID;
-  if (!SUPABASE_SERVICE_ROLE_KEY) {
-    logger.warn("findAnyOrgId() appelé sans SUPABASE_SERVICE_ROLE_KEY défini — retourne null");
-    return null;
-  }
-  const rows = await supabaseRest("/organizations?select=id,name,slug&order=created_at.asc&limit=5");
-  if (Array.isArray(rows) && rows[0]?.id) {
-    CACHED_ANY_ORG_ID = rows[0].id;
-    return CACHED_ANY_ORG_ID;
-  }
-  logger.warn(
-    { supabaseUrl: SUPABASE_URL, query: "/organizations?select=id,name,slug&order=created_at.asc&limit=5" },
-    "findAnyOrgId() n'a trouvé aucune organisation dans Supabase"
-  );
-  return null;
-}
-
-async function ensureSessionRow(orgId, sessionName, phone, status, bridgeSessionId, sessionType) {
-  if (!orgId || !sessionName) return null;
-
-  const typeStr = sessionType ? `|type:${sessionType}` : "|type:principal";
-  const bridgeTag = bridgeSessionId ? `bridge:${bridgeSessionId}${typeStr}` : null;
-
-  if (bridgeTag) {
-    const byBridgeId = await supabaseRest(
-      `/sessions_qr?org_id=eq.${orgId}&device=eq.${encodeURIComponent(bridgeTag)}&select=id,name,phone,status,latency_ms,last_seen_at,created_at,device&limit=1`,
-    );
-    if (Array.isArray(byBridgeId) && byBridgeId[0]?.id) {
-      await supabaseRest(`/sessions_qr?id=eq.${byBridgeId[0].id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          name: sessionName,
-          phone: formatPhone(phone) || null,
-          status: status ?? "connected",
-          last_seen_at: new Date().toISOString(),
-        }),
-      });
-      return { ...byBridgeId[0], device: bridgeTag };
-    }
-  }
-
-  const existing = await supabaseRest(
-    `/sessions_qr?org_id=eq.${orgId}&name=eq.${encodeURIComponent(sessionName)}&select=id,name,phone,status,latency_ms,last_seen_at,created_at,device&limit=1`,
-  );
-  if (Array.isArray(existing) && existing[0]?.id) {
-    await supabaseRest(`/sessions_qr?id=eq.${existing[0].id}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        phone: formatPhone(phone) || null,
-        status: status ?? existing[0].status ?? "connected",
-        device: bridgeTag ?? existing[0].device ?? null,
-        last_seen_at: new Date().toISOString(),
-      }),
-    });
-    return { ...existing[0], device: bridgeTag ?? existing[0].device ?? null };
-  }
-
-  const created = await supabaseRest("/sessions_qr", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      org_id: orgId,
-      name: sessionName,
-      phone: formatPhone(phone) || null,
-      device: bridgeTag,
-      status: status ?? "connected",
-    }),
-  });
-  return Array.isArray(created) ? created[0] ?? null : null;
-}
-
-function normalizeContactStage(value) {
-  const stage = String(value ?? "").trim().toLowerCase();
-  if (stage === "client" || stage === "loyal" || stage === "interested" || stage === "lost" || stage === "prospect") {
-    return stage;
-  }
-  if (stage.includes("fidel")) return "loyal";
-  if (stage.includes("inter")) return "interested";
-  if (stage.includes("client")) return "client";
-  if (stage.includes("perdu")) return "lost";
-  return "prospect";
-}
-
-function mapSessionStatus(value) {
-  const status = String(value ?? "").toLowerCase();
-  if (status === "connected") return "connected";
-  if (status === "unstable") return "unstable";
-  return "disconnected";
-}
-
-function bridgeIdFromSessionRow(row) {
-  const device = String(row?.device ?? "");
-  const match = device.match(/bridge:([^|]+)/);
-  if (match) return match[1];
-  return null;
-}
-
-function typeFromSessionRow(row) {
-  const device = String(row?.device ?? "");
-  const match = device.match(/type:([^|]+)/);
-  if (match) return match[1];
-  return "principal";
-}
-
-async function ensureContactRow(orgId, contact) {
-  if (!orgId) return null;
-
-  // remote_jid optionnel : persister le JID WhatsApp réel (@lid, @s.whatsapp.net, ...) pour résolution future
-  const rawRemoteJid = String(contact?.remoteJid ?? "").trim();
-  const remoteJidLower = rawRemoteJid ? rawRemoteJid.toLowerCase() : "";
-
-  const extraPatchCols = {};
-  if (remoteJidLower) {
-    extraPatchCols.remote_jid = remoteJidLower;
-    if (remoteJidLower.endsWith("@lid")) extraPatchCols.remote_jid_type = "lid";
-    else if (remoteJidLower.endsWith("@s.whatsapp.net")) extraPatchCols.remote_jid_type = "standard";
-  }
-
-  if (contact?.id && String(contact.id).trim()) {
-    const byId = await supabaseRest(
-      `/contacts?id=eq.${String(contact.id).trim()}&select=id,name,phone,tags,consent_marketing,org_id,remote_jid&limit=1`,
-    ).catch(() => []);
-    if (Array.isArray(byId) && byId[0]?.id && String(byId[0].org_id === orgId || byId[0]?.id)) {
-      const phoneDigits = normalizeDigits(contact?.phone || byId[0].phone);
-      const canonicalPhone = phoneDigits ? formatPhone(phoneDigits) : (byId[0].phone?.trim() || null);
-      const patchBody = {
-        name: contact?.name?.trim() || byId[0].name,
-        tags: Array.isArray(contact?.tags) ? contact.tags : byId[0].tags ?? [],
-        consent_marketing: contact?.consent ?? byId[0].consent_marketing ?? true,
-        phone: byId[0].phone?.trim() || canonicalPhone,
-        ...extraPatchCols,
-      };
-      // Patch avec remote_jid uniquement si renseigné (colonne peut ne pas exister)
-      await supabaseRest(`/contacts?id=eq.${byId[0].id}`, {
-        method: "PATCH",
-        body: JSON.stringify(remoteJidLower ? patchBody : { name: patchBody.name, tags: patchBody.tags, consent_marketing: patchBody.consent_marketing, phone: patchBody.phone }),
-      }).catch(() => {
-        // Fallback : réessayer sans remote_jid (colonne absente du schéma)
-        if (remoteJidLower) {
-          supabaseRest(`/contacts?id=eq.${byId[0].id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ name: patchBody.name, tags: patchBody.tags, consent_marketing: patchBody.consent_marketing, phone: patchBody.phone }),
-          }).catch(() => { });
-        }
-      });
-      return byId[0];
-    }
-  }
-
-  const phoneDigits = normalizeDigits(contact?.phone);
-  if (!phoneDigits) return null;
-
-  let existing = [];
-  const variants = formatPhoneVariants(phoneDigits);
-  if (variants.length > 0) {
-    const params = variants.map(v => `"${encodeURIComponent(v)}"`).join(",");
-    const rows = await supabaseRest(
-      `/contacts?org_id=eq.${orgId}&phone=in.(${params})&select=id,name,phone,tags,consent_marketing,remote_jid&limit=10`,
-    );
-    if (Array.isArray(rows) && rows.length > 0) {
-      let best = rows.find(c => normalizeDigits(c.phone) === phoneDigits);
-      if (!best) best = rows[0];
-      existing = [best];
-    }
-  }
-
-  if (!existing[0]?.id) {
-    const suffix = phoneDigits.slice(-4);
-    const bySuffix = await supabaseRest(
-      `/contacts?org_id=eq.${orgId}&name=ilike.${encodeURIComponent(`%${suffix}%`)}&select=id,name,phone,tags,consent_marketing&limit=20`,
-    ).catch(() => []);
-    if (Array.isArray(bySuffix) && bySuffix.length > 0) {
-      const match = bySuffix.find(c => normalizeDigits(c.phone) === phoneDigits);
-      if (match) existing = [match];
-    }
-  }
-
-  if (existing[0]?.id) {
-    const canonicalPhone = formatPhone(phoneDigits);
-    const basePatch = {
-      name: contact?.name?.trim() || existing[0].name,
-      tags: Array.isArray(contact?.tags) ? contact.tags : existing[0].tags ?? [],
-      consent_marketing: contact?.consent ?? existing[0].consent_marketing ?? true,
-      phone: existing[0].phone?.trim() || canonicalPhone,
-    };
-    // Patch avec remote_jid si applicable (fallback silencieux si colonne absente)
-    await supabaseRest(`/contacts?id=eq.${existing[0].id}`, {
-      method: "PATCH",
-      body: JSON.stringify(remoteJidLower ? { ...basePatch, ...extraPatchCols } : basePatch),
-    }).catch(() => {
-      if (remoteJidLower) {
-        supabaseRest(`/contacts?id=eq.${existing[0].id}`, { method: "PATCH", body: JSON.stringify(basePatch) }).catch(() => { });
-      }
-    });
-    return existing[0];
-  }
-
-  const canonicalPhone = formatPhone(phoneDigits);
-  const baseCreate = {
-    id: contact?.id || undefined,
-    org_id: orgId,
-    phone: canonicalPhone,
-    name: contact?.name?.trim() || `Contact ${canonicalPhone.slice(-4)}`,
-    stage: contact?.stage ?? "prospect",
-    score: Number(contact?.score ?? 0),
-    tags: Array.isArray(contact?.tags) ? contact.tags : [],
-    consent_marketing: contact?.consent ?? true,
-  };
-  const createBody = remoteJidLower ? { ...baseCreate, ...extraPatchCols } : baseCreate;
-  const created = await supabaseRest("/contacts", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(createBody),
-  }).catch(async () => {
-    // Fallback : créer sans remote_jid si la colonne n'existe pas
-    if (remoteJidLower) {
-      return supabaseRest("/contacts", {
-        method: "POST",
-        headers: { Prefer: "return=representation" },
-        body: JSON.stringify(baseCreate),
-      }).catch(() => []);
-    }
-    return [];
-  });
-  return Array.isArray(created) ? created[0] ?? null : null;
-}
-
-async function ensureConversationRow(orgId, contactId, sessionRowId, at, status) {
-  if (!orgId || !contactId) return null;
-
-  const allExisting = await supabaseRest(
-    `/conversations?org_id=eq.${orgId}&contact_id=eq.${contactId}&select=id,status,unread_count,last_message_at,created_at&order=created_at.asc&limit=50`,
-  );
-  if (Array.isArray(allExisting) && allExisting.length > 0) {
-    const canonical = allExisting[0];
-    if (allExisting.length > 1) {
-      const extras = allExisting.slice(1);
-      for (const extra of extras) {
-        const extraMessages = await supabaseRest(`/messages?conversation_id=eq.${extra.id}&select=*&order=created_at.asc`);
-        if (Array.isArray(extraMessages) && extraMessages.length > 0) {
-          for (const msg of extraMessages) {
-            await supabaseRest("/messages", {
-              method: "POST",
-              headers: { Prefer: "return=representation" },
-              body: JSON.stringify({
-                org_id: orgId,
-                conversation_id: canonical.id,
-                direction: msg.direction,
-                type: msg.type ?? "text",
-                body: msg.body ?? "",
-                status: msg.status ?? (msg.direction === "out" ? "sent" : "delivered"),
-                created_at: msg.created_at ?? new Date().toISOString(),
-              }),
-            }).catch(() => { });
-          }
-        }
-        await supabaseRest(`/conversations?id=eq.${extra.id}`, { method: "DELETE" }).catch(() => { });
-        logger.info({ orgId, contactId, mergedInto: canonical.id, deleted: extra.id }, "Merged duplicate conversation row");
-      }
-    }
-
-    const unread = Number(canonical.unread_count ?? 0);
-    const patch = {
-      session_id: sessionRowId ?? canonical.session_id ?? null,
-      last_message_at: new Date(at).toISOString(),
-      status: status ?? canonical.status ?? "open",
-      unread_count: status === "new" ? unread + 1 : unread,
-    };
-    await supabaseRest(`/conversations?id=eq.${canonical.id}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    });
-    return { ...canonical, ...patch };
-  }
-
-  const created = await supabaseRest("/conversations", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      org_id: orgId,
-      contact_id: contactId,
-      session_id: sessionRowId ?? null,
-      status: status ?? "new",
-      unread_count: status === "new" ? 1 : 0,
-      last_message_at: new Date(at).toISOString(),
-    }),
-  });
-  return Array.isArray(created) ? created[0] ?? null : null;
-}
-
-async function persistRuntimeMessageDirect(orgId, opts) {
-  if (!orgId || !opts) return { ok: false, reason: "invalid_args" };
-  const sessionRow = await ensureSessionRow(
-    orgId,
-    opts?.sessionName ?? opts?.sessionId ?? "Session WhatsApp",
-    opts?.sessionPhone,
-    opts?.sessionStatus ?? "connected",
-    opts?.sessionId,
-  );
-  const contactRow = await ensureContactRow(orgId, opts?.contact);
-  if (!contactRow?.id) return { ok: false, reason: "contact_not_found" };
-
-  const direction = opts?.message?.direction === "out" ? "out" : "in";
-  const status = direction === "in" ? "new" : "open";
-  const at = Number(opts?.message?.at ?? Date.now());
-  const conversationRow = await ensureConversationRow(orgId, contactRow.id, sessionRow?.id ?? null, at, status);
-  if (!conversationRow?.id) return { ok: false, reason: "conversation_not_found" };
-
-  const bodyText = String(opts?.message?.body ?? "").trim();
-  const msgStatus = opts?.message?.status ?? (direction === "out" ? "sent" : "delivered");
-  const createdAtIso = new Date(at).toISOString();
-
-  const atLower = new Date(at - 5000).toISOString();
-  const atUpper = new Date(at + 5000).toISOString();
-  const dupCheck = await supabaseRest(
-    `/messages?conversation_id=eq.${conversationRow.id}&direction=eq.${direction}&body=eq.${encodeURIComponent(bodyText)}&created_at=gte.${encodeURIComponent(atLower)}&created_at=lte.${encodeURIComponent(atUpper)}&select=id&limit=1`,
-  );
-  if (Array.isArray(dupCheck) && dupCheck.length > 0) {
-    return { ok: true, id: dupCheck[0].id, duplicated: true };
-  }
-
-  const created = await supabaseRest("/messages", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      org_id: orgId,
-      conversation_id: conversationRow.id,
-      direction,
-      type: "text",
-      body: bodyText,
-      status: msgStatus,
-      created_at: createdAtIso,
-    }),
-  });
-
-  return { ok: Array.isArray(created) && !!created[0]?.id, id: created?.[0]?.id ?? null };
-}
-
-async function persistRuntimeMessage(payload) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return { ok: false, reason: "supabase_not_configured" };
-
-  const orgId = await findOrgId(payload?.orgName);
-  if (!orgId) return { ok: false, reason: "org_not_found" };
-
-  return persistRuntimeMessageDirect(orgId, payload);
-}
-
-async function persistRuntimeWaMessage(bridgeSessionId, opts) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) {
-    logger.warn({ bridgeSessionId, opts }, "persistRuntimeWaMessage: SUPABASE_SERVICE_ROLE_KEY absente — skip persistance DB");
-    return { ok: false, reason: "supabase_not_configured" };
-  }
-  if (!bridgeSessionId || !opts) return { ok: false, reason: "invalid_args" };
-
-  const orgId = await findAnyOrgId();
-  if (!orgId) {
-    logger.warn({ bridgeSessionId }, "persistRuntimeWaMessage: aucune organisation trouvée — skip persistance DB");
-    return { ok: false, reason: "org_not_found" };
-  }
-
-  const peerDigits = normalizeDigits(opts.peerPhone);
-  const peerPhoneFormatted = formatPhone(peerDigits);
-  if (!peerPhoneFormatted) return { ok: false, reason: "invalid_peer_phone" };
-
-  return persistRuntimeMessageDirect(orgId, {
-    sessionId: bridgeSessionId,
-    sessionName: opts?.sessionName ?? bridgeSessionId,
-    sessionPhone: opts?.sessionPhone,
-    sessionStatus: opts?.sessionStatus ?? "connected",
-    contact: {
-      name: opts?.peerName?.trim() || `Contact ${peerDigits.slice(-4)}`,
-      phone: peerPhoneFormatted,
-      tags: ["WhatsApp"],
-      consent: true,
-      stage: "prospect",
-      score: 0,
-      // BUG FIX #2: Transmettre remote_jid pour qu'ensureContactRow le persiste
-      remoteJid: opts?.remoteJid ? String(opts.remoteJid).toLowerCase() : undefined,
-    },
-    message: {
-      direction: opts.direction === "out" ? "out" : "in",
-      body: String(opts?.body ?? "").trim(),
-      at: Number(opts?.at ?? Date.now()),
-      status: opts.direction === "out" ? "sent" : "delivered",
-    },
-  });
-}
-
-async function persistRuntimeContact(payload) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return { ok: false, reason: "supabase_not_configured" };
-
-  const orgId = await findOrgId(payload?.orgName);
-  if (!orgId) return { ok: false, reason: "org_not_found" };
-
-  const contactRow = await ensureContactRow(orgId, payload?.contact);
-  return { ok: !!contactRow?.id };
-}
-
-async function persistRuntimeSession(payload) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return { ok: false, reason: "supabase_not_configured" };
-
-  const orgId = await findOrgId(payload?.orgName);
-  if (!orgId) return { ok: false, reason: "org_not_found" };
-
-  const sessionRow = await ensureSessionRow(
-    orgId,
-    payload?.sessionName ?? payload?.sessionId ?? "Session WhatsApp",
-    payload?.sessionPhone,
-    payload?.sessionStatus ?? "connected",
-    payload?.sessionId,
-    payload?.sessionType
-  );
-
-  return { ok: !!sessionRow?.id };
-}
-
-function toCampaignStatus(value, fourEyes) {
-  const status = String(value ?? "draft").toLowerCase();
-  if (fourEyes && status === "draft") return "review";
-  if (["draft", "scheduled", "running", "paused", "done", "stopped"].includes(status)) return status;
-  return "draft";
-}
-
-function toDbCampaignStatus(value) {
-  const status = String(value ?? "draft").toLowerCase();
-  if (status === "review") return "draft";
-  if (["draft", "scheduled", "running", "paused", "done", "stopped"].includes(status)) return status;
-  return "draft";
-}
-
-function hourToPgTime(hour, fallback) {
-  const n = Number(hour);
-  const safe = Number.isFinite(n) ? Math.max(0, Math.min(23, Math.trunc(n))) : fallback;
-  return `${String(safe).padStart(2, "0")}:00:00`;
-}
-
-async function persistRuntimeCampaign(payload) {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return { ok: false, reason: "supabase_not_configured" };
-
-  const orgId = await findOrgId(payload?.orgName);
-  if (!orgId) return { ok: false, reason: "org_not_found" };
-
-  const campaign = payload?.campaign ?? {};
-  const remoteId = typeof campaign?.remoteId === "string" && campaign.remoteId ? campaign.remoteId : null;
-  const body = {
-    org_id: orgId,
-    name: String(campaign?.name ?? "Campagne").trim() || "Campagne",
-    goal: String(campaign?.goal ?? "promotion"),
-    status: toDbCampaignStatus(campaign?.status),
-    audience: {
-      label: String(campaign?.audience ?? ""),
-      recipientIds: Array.isArray(campaign?.recipientIds) ? campaign.recipientIds : [],
-      segments: Array.isArray(campaign?.segments) ? campaign.segments : [],
-      manualIds: Array.isArray(campaign?.manualIds) ? campaign.manualIds : [],
-      bridgeSessionId: campaign?.bridgeSessionId ?? null,
-    },
-    content: String(campaign?.content ?? ""),
-    media: {
-      url: campaign?.mediaUrl ?? null,
-      bridgeSessionId: campaign?.bridgeSessionId ?? null,
-    },
-    scheduled_at: campaign?.scheduledAt ? new Date(Number(campaign.scheduledAt)).toISOString() : null,
-    timezone: String(campaign?.timezone ?? "Africa/Tunis"),
-    window_start: hourToPgTime(campaign?.windowStart, 8),
-    window_end: hourToPgTime(campaign?.windowEnd, 21),
-    follow_up: Boolean(campaign?.followUpOn),
-    follow_up_msg: String(campaign?.followUpMsg ?? ""),
-    stop_on_reply: Boolean(campaign?.stopOnReply),
-    four_eyes: Boolean(campaign?.needsReview),
-    stats: {
-      eligible: Number(campaign?.total ?? 0),
-      sent: Number(campaign?.sent ?? 0),
-      delivered: Number(campaign?.delivered ?? 0),
-      read: 0,
-      replies: Number(campaign?.replies ?? 0),
-      unsub: Number(campaign?.unsubscribed ?? 0),
-      failed: Number(campaign?.failed ?? 0),
-      ratePerMin: Number(campaign?.ratePerMin ?? 15),
-      dispatchCursor: Number(campaign?.dispatchCursor ?? 0),
-    },
-  };
-
-  if (remoteId) {
-    const updated = await supabaseRest(`/campaigns?id=eq.${remoteId}&org_id=eq.${orgId}`, {
-      method: "PATCH",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify(body),
-    });
-    return { ok: Array.isArray(updated) && !!updated[0]?.id, id: updated?.[0]?.id ?? remoteId };
-  }
-
-  const created = await supabaseRest("/campaigns", {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify(body),
-  });
-  return { ok: Array.isArray(created) && !!created[0]?.id, id: created?.[0]?.id ?? null };
-}
 
 async function buildRuntimeBootstrap(orgName) {
   if (!SUPABASE_SERVICE_ROLE_KEY) return { ok: false, reason: "supabase_not_configured" };
@@ -1148,28 +402,6 @@ async function buildRuntimeBootstrap(orgName) {
   };
 }
 
-function getEntry(id, organizationId = DEFAULT_ORG_ID) {
-  if (!sessions.has(id)) {
-    sessions.set(id, {
-      status: "disconnected",
-      qr: undefined,
-      phone: undefined,
-      pushname: undefined,
-      sock: undefined,
-      retryCount: 0,
-      events: [],
-      // Multi-tenant : organisation propriétaire de la session (isolation, section 15/61)
-      organizationId,
-      // Anti-doublon (section 50) : ids WhatsApp déjà traités pour cette session
-      processedMessageIds: new Set(),
-      // Mode dégradé (section 53) : file de messages sortants en attente de connexion
-      outboundQueue: [],
-      // Horodatage de dernière activité (pour GET /orgs/:orgId/sessions)
-      lastSeenAt: Date.now(),
-    });
-  }
-  return sessions.get(id);
-}
 
 // Verrou logique par conversation (section 51) : sérialise le traitement des
 // messages entrants d'une même conversation via une chaîne de Promises.
@@ -1705,4 +937,228 @@ app.get("/sessions/:id/events", (req, res) => {
     });
 
   // Safety net : si le filtre est vide mais que des events existent très récents, les renvoyer.
-  // Évite un curseur bloqué « à l'inf
+  // Évite un curseur bloqué « à l'infini » quand at << since.
+  if (since > 0 && all.length > 0 && events.length === 0) {
+    const mostRecentReceived = Number(all[all.length - 1]?.receivedAt ?? 0);
+    if (mostRecentReceived >= since - 60_000) {
+      const tail = all.slice(-10);
+      res.json({ events: tail, _hint: "tail_since_fallback", _count: tail.length, _total: all.length });
+      return;
+    }
+  }
+  res.json({ events, _count: events.length, _total: all.length });
+});
+
+app.post("/runtime/contacts", async (req, res) => {
+  const result = await persistRuntimeContact(req.body ?? {});
+  res.json(result);
+});
+
+app.post("/runtime/sessions", async (req, res) => {
+  const result = await persistRuntimeSession(req.body ?? {});
+  res.json(result);
+});
+
+app.delete("/runtime/sessions/:id", async (req, res) => {
+  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
+  let sid = req.params.id;
+  if (sid.startsWith("db_")) {
+    sid = sid.slice(3);
+    const del = await supabaseRest(`/sessions_qr?id=eq.${sid}`, { method: "DELETE" });
+    return res.json({ ok: true, deleted: del });
+  } else {
+    // Delete by device match (bridge tag)
+    const lists = await supabaseRest(`/sessions_qr?device=like.*bridge:${sid}*&select=id`);
+    if (Array.isArray(lists)) {
+      for (const row of lists) {
+        await supabaseRest(`/sessions_qr?id=eq.${row.id}`, { method: "DELETE" });
+      }
+    }
+    return res.json({ ok: true });
+  }
+});
+
+app.post("/runtime/messages", async (req, res) => {
+  const result = await persistRuntimeMessage(req.body ?? {});
+  res.json(result);
+});
+
+app.delete("/runtime/conversations/:id", async (req, res) => {
+  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
+  try {
+    await supabaseRest(`/conversations?id=eq.${req.params.id}`, { method: "DELETE" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: "erreur", details: String(err) });
+  }
+});
+
+app.post("/runtime/campaigns", async (req, res) => {
+  const result = await persistRuntimeCampaign(req.body ?? {});
+  res.json(result);
+});
+
+app.delete("/runtime/campaigns/:id", async (req, res) => {
+  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
+  try {
+    await supabaseRest(`/campaigns?id=eq.${req.params.id}`, { method: "DELETE" });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: "erreur", details: String(err) });
+  }
+});
+
+
+app.post("/runtime/bootstrap", async (req, res) => {
+  const result = await buildRuntimeBootstrap(req.body?.orgName);
+  res.json(result);
+});
+
+app.post("/sessions/:id/messages", async (req, res) => {
+  const sessionId = req.params.id;
+  const entry = sessions.get(sessionId);
+  const text = String(req.body?.text ?? "").trim();
+  const to = String(req.body?.to ?? "").trim();
+  const jid = resolveSendJid(to);
+
+  if (!entry?.sock || entry.status !== "connected") {
+    return res.status(409).json({ error: "session non connectee" });
+  }
+  if (!jid) {
+    return res.status(400).json({ error: "numero destinataire invalide" });
+  }
+  if (!text) {
+    return res.status(400).json({ error: "message vide" });
+  }
+
+  try {
+    const [presence] = await entry.sock.onWhatsApp(jid).catch(() => []);
+    if (presence && presence.exists === false) {
+      return res.status(404).json({ error: "destinataire WhatsApp introuvable" });
+    }
+
+    const out = await entry.sock.sendMessage(jid, { text });
+    const sendAt = Date.now();
+    const msgId = out?.key?.id ?? `${sessionId}_${sendAt}_${Math.random().toString(36).slice(2, 8)}`;
+    const peerPhone = jidToPhone(jid) ?? to;
+
+    pushEvent(sessionId, {
+      id: msgId,
+      type: "message",
+      direction: "out",
+      sessionId,
+      from: entry.phone ?? "",
+      to: peerPhone,
+      body: text,
+      pushName: undefined,
+      at: sendAt,
+    });
+
+    persistRuntimeWaMessage(sessionId, {
+      sessionName: entry.pushname ?? sessionId,
+      sessionPhone: entry.phone,
+      sessionStatus: entry.status,
+      peerPhone,
+      peerName: undefined,
+      direction: "out",
+      body: text,
+      at: sendAt,
+    }).catch((persistErr) => {
+      logger.warn({ persistErr, sessionId, peerPhone }, "Failed to persist outgoing /messages endpoint message to DB");
+    });
+
+    return res.json({
+      ok: true,
+      id: msgId,
+      to: jid,
+      status: "sent",
+      at: sendAt,
+    });
+  } catch (err) {
+    logger.error({ sessionId, to: jid, err }, "echec envoi message");
+    return res.status(500).json({ error: "impossible d'envoyer le message" });
+  }
+});
+
+// Envoi avec mode dégradé (section 53) : si la session est déconnectée, le
+// message est mis en file (status 'waiting_connection') et sera renvoyé
+// automatiquement à la reconnexion — jamais de perte silencieuse.
+app.post("/sessions/:id/send", async (req, res) => {
+  const sessionId = req.params.id;
+  const entry = sessions.get(sessionId);
+  const to = String(req.body?.to ?? "").trim();
+  const text = String(req.body?.text ?? "").trim();
+
+  if (!to) return res.status(400).json({ error: "destinataire 'to' requis" });
+  if (!text) return res.status(400).json({ error: "message vide" });
+
+  const jid = resolveSendJid(to, req.body?.remoteJid);
+  if (!jid) return res.status(400).json({ error: "numero destinataire invalide" });
+
+  if (!entry || !entry.sock || entry.status !== "connected") {
+    // File d'attente en mémoire : retry automatique à la reconnexion
+    const target = entry ?? getEntry(sessionId);
+    target.outboundQueue.push({ to, text, preferredRemoteJid: req.body?.remoteJid, queuedAt: Date.now() });
+    logger.info({ sessionId, to: jid, queued: target.outboundQueue.length }, "[QUEUE] session déconnectée — message mis en file");
+    return res.status(202).json({ ok: true, status: "waiting_connection", queued: target.outboundQueue.length });
+  }
+
+  try {
+    const out = await entry.sock.sendMessage(jid, { text });
+    const sendAt = Date.now();
+    entry.lastSeenAt = sendAt;
+    const msgId = out?.key?.id ?? `${sessionId}_${sendAt}_${Math.random().toString(36).slice(2, 8)}`;
+    return res.json({ ok: true, id: msgId, to: jid, status: "sent", at: sendAt });
+  } catch (err) {
+    logger.error({ sessionId, to: jid, err }, "echec envoi message (/send)");
+    return res.status(500).json({ error: "impossible d'envoyer le message" });
+  }
+});
+
+// Listing multi-tenant (section 12) : sessions d'une organisation.
+// N'expose jamais les credentials — uniquement statut, téléphone, dernière activité.
+app.get("/orgs/:orgId/sessions", (req, res) => {
+  const orgId = req.params.orgId;
+  if (!isValidOrgId(orgId)) {
+    return res.status(400).json({ error: "organizationId invalide" });
+  }
+  const list = [];
+  for (const [sessionId, entry] of sessions.entries()) {
+    if ((entry.organizationId ?? DEFAULT_ORG_ID) !== orgId) continue;
+    list.push({
+      sessionId,
+      status: entry.status,
+      phone: entry.phone ?? null,
+      pushname: entry.pushname ?? null,
+      lastSeenAt: entry.lastSeenAt ?? null,
+      queuedMessages: entry.outboundQueue?.length ?? 0,
+    });
+  }
+  res.json({ organizationId: orgId, sessions: list, count: list.length });
+});
+
+app.post("/sessions/:id/logout", async (req, res) => {
+  const entry = sessions.get(req.params.id);
+  try {
+    if (entry?.sock) {
+      await entry.sock.logout().catch(() => { });
+      entry.sock.end(undefined);
+    }
+  } catch (err) {
+    logger.warn({ id: req.params.id, err }, "logout partiel");
+  }
+  sessions.delete(req.params.id);
+  conversationLocks.delete(req.params.id);
+  await fs.rm(sessionAuthDir(entry?.organizationId ?? DEFAULT_ORG_ID, req.params.id), { recursive: true, force: true }).catch(() => { });
+  // Nettoyage legacy au cas où un ancien dossier plat existerait encore
+  await fs.rm(path.join(AUTH_DIR, req.params.id), { recursive: true, force: true }).catch(() => { });
+  res.json({ status: "disconnected" });
+});
+
+app.listen(PORT, () => {
+  logger.info({ port: PORT, authDir: AUTH_DIR }, "MiraFlow Bridge démarré");
+});
+
+// Injection des dépendances dans le module IA (évite un cycle ESM) puis réveil des sessions.
+initAi({ startSession });
+autoWakeSessions();
