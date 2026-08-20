@@ -233,13 +233,13 @@ export default function ContactPanel({ contact, conversations, onMessage }: Cont
           >
             <MessageSquare className="size-3.5" /> Message
           </button>
-          <button
-            type="button"
-            onClick={() => toast.info("Appel simulé", { description: `Appel de ${effective.name}…` })}
+          <a
+            href={`tel:${effective.phone.replace(/\s/g, "")}`}
+            aria-label={`Appeler ${effective.name}`}
             className="flex items-center justify-center gap-1.5 rounded-r-sm border border-line bg-surface-2 px-3 py-2 text-[12px] font-medium text-mid transition-colors hover:bg-surface-3 hover:text-hi"
           >
             <Phone className="size-3.5" />
-          </button>
+          </a>
         </div>
       </div>
 
