@@ -25,6 +25,10 @@ import makeWASocket, {
 
 const PORT = Number(process.env.PORT || 3100);
 const AUTH_DIR = process.env.AUTH_DIR || path.resolve("./auth");
+// Quota multi-tenant (section 20) : 0 = illimité
+const MAX_SESSIONS_PER_ORG = Number(process.env.MAX_SESSIONS_PER_ORG || 0);
+// Organisation par défaut quand le client n'en précise pas (rétro-compatibilité API)
+const DEFAULT_ORG_ID = "default";
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "https://yifjcvwhmdycpsvldlzo.supabase.co").replace(/\/+$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
 
@@ -39,7 +43,8 @@ setTimeout(async () => {
       supabaseUrl: SUPABASE_URL,
       hasServiceKey: !!SUPABASE_SERVICE_ROLE_KEY,
       serviceKeyPrefix: SUPABASE_SERVICE_ROLE_KEY ? SUPABASE_SERVICE_ROLE_KEY.slice(0, 10) + "..." : null,
-      openaiKeyConfigured: !!String(process.env.OPENAI_API_KEY || "").trim(),
+      aiProvider: String(process.env.AI_PROVIDER || (String(process.env.GROQ_API_KEY || "").trim() ? "groq" : "ollama")),
+      aiConfigured: String(process.env.GROQ_API_KEY || "").trim().length > 0 || true,
     },
     "[BOOT] MiraFlow Bridge — environnement chargé"
   );
@@ -196,7 +201,7 @@ function jidToPhone(raw) {
   const beforeAt = String(raw ?? "").split("@")[0];
   if (!beforeAt) return "";
 
-  const segments = beforeAt.split(/[:\-_.]/);
+  const segments = beforeAt.split(/[:\\-_.]/);
   for (const seg of segments) {
     const digits = String(seg).replace(/\D/g, "");
     if (looksLikeValidPhone(digits)) {
@@ -292,7 +297,7 @@ function pushEvent(sessionId, event) {
 function orgSlug(value) {
   return String(value ?? "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -1143,7 +1148,7 @@ async function buildRuntimeBootstrap(orgName) {
   };
 }
 
-function getEntry(id) {
+function getEntry(id, organizationId = DEFAULT_ORG_ID) {
   if (!sessions.has(id)) {
     sessions.set(id, {
       status: "disconnected",
@@ -1153,20 +1158,151 @@ function getEntry(id) {
       sock: undefined,
       retryCount: 0,
       events: [],
+      // Multi-tenant : organisation propriétaire de la session (isolation, section 15/61)
+      organizationId,
+      // Anti-doublon (section 50) : ids WhatsApp déjà traités pour cette session
+      processedMessageIds: new Set(),
+      // Mode dégradé (section 53) : file de messages sortants en attente de connexion
+      outboundQueue: [],
+      // Horodatage de dernière activité (pour GET /orgs/:orgId/sessions)
+      lastSeenAt: Date.now(),
     });
   }
   return sessions.get(id);
 }
 
-async function startSession(sessionId) {
-  const entry = getEntry(sessionId);
+// Verrou logique par conversation (section 51) : sérialise le traitement des
+// messages entrants d'une même conversation via une chaîne de Promises.
+const conversationLocks = new Map();
+
+function withConversationLock(conversationId, task) {
+  const previous = conversationLocks.get(conversationId) ?? Promise.resolve();
+  const next = previous.then(() => task()).catch((err) => {
+    logger.error({ conversationId, err }, "Erreur dans la tâche verrouillée de conversation");
+  });
+  conversationLocks.set(conversationId, next);
+  // Nettoyage mémoire : supprimer le verrou une fois la chaîne terminée
+  next.finally(() => {
+    if (conversationLocks.get(conversationId) === next) conversationLocks.delete(conversationId);
+  });
+  return next;
+}
+
+// ============ ISOLATION PHYSIQUE (section 15) ============
+// Les credentials Baileys sont stockés dans AUTH_DIR/<organizationId>/<sessionId>/.
+// Chaque dossier de session contient un owner.json { organizationId } qui rend
+// impossible le démarrage d'une session par une autre organisation (403).
+
+function isValidOrgId(orgId) {
+  return typeof orgId === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(orgId);
+}
+
+function sessionAuthDir(organizationId, sessionId) {
+  return path.join(AUTH_DIR, organizationId, sessionId);
+}
+
+async function readOwnerOrg(dir) {
+  try {
+    const raw = await fs.readFile(path.join(dir, "owner.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.organizationId === "string" ? parsed.organizationId : null;
+  } catch (_) {
+    return null; // pas d'owner.json : dossier neuf ou legacy
+  }
+}
+
+async function writeOwnerOrg(dir, organizationId) {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "owner.json"),
+    JSON.stringify({ organizationId, createdAt: new Date().toISOString() }, null, 2),
+  ).catch((err) => logger.warn({ dir, err }, "impossible d'écrire owner.json"));
+}
+
+/**
+ * Résout et vérifie le propriétaire d'une session avant démarrage.
+ * Retourne l'organizationId effectif, ou null si conflit de propriétaire (→ 403).
+ */
+async function resolveSessionOwner(sessionId, requestedOrgId) {
+  const orgId = isValidOrgId(requestedOrgId) ? requestedOrgId : DEFAULT_ORG_ID;
+  const dir = sessionAuthDir(orgId, sessionId);
+
+  // Rétro-compatibilité : ancien format plat AUTH_DIR/<sessionId> → migrer vers 'default'
+  const legacyDir = path.join(AUTH_DIR, sessionId);
+  if (orgId === DEFAULT_ORG_ID) {
+    try {
+      const stat = await fs.stat(legacyDir).catch(() => null);
+      if (stat?.isDirectory() && !(await fs.stat(dir).catch(() => null))) {
+        await fs.mkdir(path.dirname(dir), { recursive: true });
+        await fs.rename(legacyDir, dir);
+        logger.info({ sessionId, from: legacyDir, to: dir }, "migration legacy auth dir vers structure multi-tenant");
+      }
+    } catch (err) {
+      logger.warn({ sessionId, err }, "échec migration legacy auth dir");
+    }
+  }
+
+  const existingOwner = await readOwnerOrg(dir);
+  if (existingOwner && existingOwner !== orgId) {
+    // Incohérence de propriétaire → refus (règle absolue d'isolation, section 61)
+    return null;
+  }
+  if (!existingOwner) {
+    await writeOwnerOrg(dir, orgId);
+  }
+  return orgId;
+}
+
+// Quota par organisation (section 20) : compte les sessions actives de l'org
+function countOrgActiveSessions(orgId) {
+  let count = 0;
+  for (const entry of sessions.values()) {
+    if ((entry.organizationId ?? DEFAULT_ORG_ID) === orgId && entry.status !== "disconnected") count++;
+  }
+  return count;
+}
+
+// ============ MODE DÉGRADÉ (section 53) ============
+// Si le socket est déconnecté, les messages sortants sont mis en file et
+// renvoyés automatiquement à la reconnexion : aucune perte silencieuse.
+
+async function flushOutboundQueue(sessionId, entry) {
+  if (!entry?.sock || entry.status !== "connected") return;
+  const queue = Array.isArray(entry.outboundQueue) ? entry.outboundQueue : [];
+  while (queue.length > 0 && entry.status === "connected" && entry.sock) {
+    const msg = queue.shift();
+    try {
+      const jid = resolveSendJid(msg.to, msg.preferredRemoteJid);
+      if (!jid) throw new Error("jid invalide");
+      await entry.sock.sendMessage(jid, { text: msg.text });
+      logger.info({ sessionId, to: jid }, "[QUEUE] message en file envoyé après reconnexion");
+    } catch (err) {
+      // Échec : on remet en tête de file et on réessaiera plus tard (pas de perte)
+      queue.unshift(msg);
+      logger.warn({ sessionId, err }, "[QUEUE] échec envoi message en file — conservé en queue");
+      break;
+    }
+  }
+}
+
+async function startSession(sessionId, organizationId = DEFAULT_ORG_ID) {
+  // Isolation (section 15/61) : vérifier le propriétaire AVANT de toucher aux credentials
+  const ownerOrg = await resolveSessionOwner(sessionId, organizationId);
+  if (!ownerOrg) {
+    const err = new Error("owner_mismatch");
+    err.statusCode = 403;
+    throw err;
+  }
+  const entry = getEntry(sessionId, ownerOrg);
+  entry.organizationId = ownerOrg;
   if (entry.sock && (entry.status === "connected" || entry.status === "connecting" || entry.status === "qr_pending")) {
     return entry;
   }
   entry.status = "connecting";
   entry.qr = undefined;
 
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(AUTH_DIR, sessionId));
+  // Credentials propres au couple <org>/<session> : jamais partagés (section 15)
+  const { state, saveCreds } = await useMultiFileAuthState(sessionAuthDir(ownerOrg, sessionId));
   const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
 
   const sock = makeWASocket({
@@ -1214,6 +1350,23 @@ async function startSession(sessionId) {
       }
 
       const eventId = item.key?.id ?? `${sessionId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+      // Anti-doublon (section 50) : un whatsapp_message_id n'est traité qu'une
+      // seule fois par session — jamais deux réponses au même message.
+      if (item.key?.id) {
+        if (entry.processedMessageIds.has(eventId)) {
+          logger.debug({ sessionId, eventId }, "[ANTI-DOUBLON] message déjà traité — ignoré");
+          continue;
+        }
+        entry.processedMessageIds.add(eventId);
+        // Borne mémoire : on conserve les 10 000 derniers ids par session
+        if (entry.processedMessageIds.size > 10_000) {
+          const first = entry.processedMessageIds.values().next().value;
+          entry.processedMessageIds.delete(first);
+        }
+      }
+      entry.lastSeenAt = Date.now();
+
       const msgAt = toMs(item.messageTimestamp);
       const direction = fromMe ? "out" : "in";
 
@@ -1245,9 +1398,12 @@ async function startSession(sessionId) {
       });
 
       if (!fromMe) {
-        processIncomingMessageForCampainsAndAI(entry, text, peerPhone, remoteJid).catch(err => {
-          logger.error({ err }, "Erreur de la routine IA/StopCampaign");
-        });
+        // Verrou par conversation (section 51) : les messages d'une même
+        // conversation sont traités séquentiellement, dans l'ordre d'arrivée.
+        const conversationId = `${sessionId}:${peerPhone}`;
+        withConversationLock(conversationId, () =>
+          processIncomingMessageForCampainsAndAI(entry, text, peerPhone, remoteJid)
+        );
       }
     }
   });
@@ -1272,7 +1428,10 @@ async function startSession(sessionId) {
       const jid = sock.user?.id ?? "";
       entry.phone = jid.split("@")[0].split(":")[0] || undefined;
       entry.pushname = sock.user?.name || undefined;
+      entry.lastSeenAt = Date.now();
       logger.info({ sessionId, phone: entry.phone }, "session connectée");
+      // Mode dégradé (section 53) : vider la file des messages en attente
+      flushOutboundQueue(sessionId, entry).catch(() => { });
     }
 
     if (connection === "close") {
@@ -1284,7 +1443,7 @@ async function startSession(sessionId) {
 
       if (loggedOut) {
         logger.warn({ sessionId }, "déconnexion définitive (logged out) — auth supprimé");
-        await fs.rm(path.join(AUTH_DIR, sessionId), { recursive: true, force: true }).catch(() => { });
+        await fs.rm(sessionAuthDir(entry.organizationId ?? DEFAULT_ORG_ID, sessionId), { recursive: true, force: true }).catch(() => { });
       } else {
         // reconnexion automatique avec backoff exponentiel (max 60 s)
         entry.retryCount += 1;
@@ -1477,17 +1636,27 @@ app.get("/repair/backfill-campaign-replies", async (_req, res) => {
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/sessions", async (req, res) => {
-  const { sessionId } = req.body ?? {};
-  // #region debug-point D:bridge-post-session
-  fetch("http://127.0.0.1:7777/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "bridge-sync-break", runId: "pre-fix", hypothesisId: "D", location: "bridge/src/index.js:POST /sessions", msg: "[DEBUG] bridge session start requested", data: { sessionId, body: req.body ?? null }, ts: Date.now() }) }).catch(() => { });
-  // #endregion
+  const { sessionId, organizationId } = req.body ?? {};
   if (!sessionId || typeof sessionId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(sessionId)) {
     return res.status(400).json({ error: "sessionId invalide (a-z, 0-9, -, _, 64 car. max)" });
   }
+  // Multi-tenant : organizationId optionnel (défaut 'default') pour préserver l'API existante
+  const orgId = organizationId == null ? DEFAULT_ORG_ID : String(organizationId);
+  if (!isValidOrgId(orgId)) {
+    return res.status(400).json({ error: "organizationId invalide (a-z, 0-9, -, _, 64 car. max)" });
+  }
+  // Quota (section 20) : contrôle côté backend, jamais uniquement côté frontend
+  if (MAX_SESSIONS_PER_ORG > 0 && !sessions.has(sessionId) && countOrgActiveSessions(orgId) >= MAX_SESSIONS_PER_ORG) {
+    return res.status(403).json({ error: "quota_exceeded", organizationId: orgId, max: MAX_SESSIONS_PER_ORG });
+  }
   try {
-    const entry = await startSession(sessionId);
-    res.json({ status: entry.status === "connecting" ? "qr_pending" : entry.status });
+    const entry = await startSession(sessionId, orgId);
+    res.json({ status: entry.status === "connecting" ? "qr_pending" : entry.status, organizationId: orgId });
   } catch (err) {
+    if (err?.statusCode === 403) {
+      // Le dossier de session appartient à une autre organisation (owner.json mismatch)
+      return res.status(403).json({ error: "owner_mismatch", sessionId });
+    }
     logger.error({ sessionId, err }, "échec démarrage session");
     res.status(500).json({ error: "impossible de démarrer la session" });
   }
@@ -1536,1589 +1705,4 @@ app.get("/sessions/:id/events", (req, res) => {
     });
 
   // Safety net : si le filtre est vide mais que des events existent très récents, les renvoyer.
-  // Évite un curseur bloqué « à l'infini » quand at << since.
-  if (since > 0 && all.length > 0 && events.length === 0) {
-    const mostRecentReceived = Number(all[all.length - 1]?.receivedAt ?? 0);
-    if (mostRecentReceived >= since - 60_000) {
-      const tail = all.slice(-10);
-      res.json({ events: tail, _hint: "tail_since_fallback", _count: tail.length, _total: all.length });
-      return;
-    }
-  }
-  res.json({ events, _count: events.length, _total: all.length });
-});
-
-app.post("/runtime/contacts", async (req, res) => {
-  const result = await persistRuntimeContact(req.body ?? {});
-  res.json(result);
-});
-
-app.post("/runtime/sessions", async (req, res) => {
-  const result = await persistRuntimeSession(req.body ?? {});
-  res.json(result);
-});
-
-app.delete("/runtime/sessions/:id", async (req, res) => {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
-  let sid = req.params.id;
-  if (sid.startsWith("db_")) {
-    sid = sid.slice(3);
-    const del = await supabaseRest(`/sessions_qr?id=eq.${sid}`, { method: "DELETE" });
-    return res.json({ ok: true, deleted: del });
-  } else {
-    // Delete by device match (bridge tag)
-    const lists = await supabaseRest(`/sessions_qr?device=like.*bridge:${sid}*&select=id`);
-    if (Array.isArray(lists)) {
-      for (const row of lists) {
-        await supabaseRest(`/sessions_qr?id=eq.${row.id}`, { method: "DELETE" });
-      }
-    }
-    return res.json({ ok: true });
-  }
-});
-
-app.post("/runtime/messages", async (req, res) => {
-  const result = await persistRuntimeMessage(req.body ?? {});
-  res.json(result);
-});
-
-app.delete("/runtime/conversations/:id", async (req, res) => {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
-  try {
-    await supabaseRest(`/conversations?id=eq.${req.params.id}`, { method: "DELETE" });
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: "erreur", details: String(err) });
-  }
-});
-
-app.post("/runtime/campaigns", async (req, res) => {
-  const result = await persistRuntimeCampaign(req.body ?? {});
-  res.json(result);
-});
-
-app.delete("/runtime/campaigns/:id", async (req, res) => {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return res.status(500).json({ error: "supabase non configure" });
-  try {
-    await supabaseRest(`/campaigns?id=eq.${req.params.id}`, { method: "DELETE" });
-    return res.json({ ok: true });
-  } catch (err) {
-    return res.status(500).json({ error: "erreur", details: String(err) });
-  }
-});
-
-
-app.post("/runtime/bootstrap", async (req, res) => {
-  const result = await buildRuntimeBootstrap(req.body?.orgName);
-  res.json(result);
-});
-
-app.post("/sessions/:id/messages", async (req, res) => {
-  const sessionId = req.params.id;
-  const entry = sessions.get(sessionId);
-  const text = String(req.body?.text ?? "").trim();
-  const to = String(req.body?.to ?? "").trim();
-  const jid = resolveSendJid(to);
-
-  if (!entry?.sock || entry.status !== "connected") {
-    return res.status(409).json({ error: "session non connectee" });
-  }
-  if (!jid) {
-    return res.status(400).json({ error: "numero destinataire invalide" });
-  }
-  if (!text) {
-    return res.status(400).json({ error: "message vide" });
-  }
-
-  try {
-    const [presence] = await entry.sock.onWhatsApp(jid).catch(() => []);
-    if (presence && presence.exists === false) {
-      return res.status(404).json({ error: "destinataire WhatsApp introuvable" });
-    }
-
-    const out = await entry.sock.sendMessage(jid, { text });
-    const sendAt = Date.now();
-    const msgId = out?.key?.id ?? `${sessionId}_${sendAt}_${Math.random().toString(36).slice(2, 8)}`;
-    const peerPhone = jidToPhone(jid) ?? to;
-
-    pushEvent(sessionId, {
-      id: msgId,
-      type: "message",
-      direction: "out",
-      sessionId,
-      from: entry.phone ?? "",
-      to: peerPhone,
-      body: text,
-      pushName: undefined,
-      at: sendAt,
-    });
-
-    persistRuntimeWaMessage(sessionId, {
-      sessionName: entry.pushname ?? sessionId,
-      sessionPhone: entry.phone,
-      sessionStatus: entry.status,
-      peerPhone,
-      peerName: undefined,
-      direction: "out",
-      body: text,
-      at: sendAt,
-    }).catch((persistErr) => {
-      logger.warn({ persistErr, sessionId, peerPhone }, "Failed to persist outgoing /messages endpoint message to DB");
-    });
-
-    return res.json({
-      ok: true,
-      id: msgId,
-      to: jid,
-      status: "sent",
-      at: sendAt,
-    });
-  } catch (err) {
-    logger.error({ sessionId, to: jid, err }, "echec envoi message");
-    return res.status(500).json({ error: "impossible d'envoyer le message" });
-  }
-});
-
-app.post("/sessions/:id/logout", async (req, res) => {
-  const entry = sessions.get(req.params.id);
-  try {
-    if (entry?.sock) {
-      await entry.sock.logout().catch(() => { });
-      entry.sock.end(undefined);
-    }
-  } catch (err) {
-    logger.warn({ id: req.params.id, err }, "logout partiel");
-  }
-  sessions.delete(req.params.id);
-  await fs.rm(path.join(AUTH_DIR, req.params.id), { recursive: true, force: true }).catch(() => { });
-  res.json({ status: "disconnected" });
-});
-
-app.listen(PORT, () => {
-  logger.info({ port: PORT, authDir: AUTH_DIR }, "MiraFlow Bridge démarré");
-});
-
-// ==== BACKGROUND WORKER: CAMPAIGNS ====
-// Runs every 15 seconds to dispatch "running" campaigns over real WhatsApp.
-async function tickCampaigns() {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return;
-  try {
-    const runningCampaigns = await supabaseRest("/campaigns?status=eq.running&select=id,org_id,content,stats,audience");
-    if (!Array.isArray(runningCampaigns)) return;
-
-    for (const c of runningCampaigns) {
-      if (!c || !c.stats) continue;
-
-      const audience = (c.audience && typeof c.audience === "object") ? c.audience : {};
-      const stats = (c.stats && typeof c.stats === "object") ? c.stats : {};
-
-      const entry = findCampaignSendSession(audience.bridgeSessionId);
-      if (!entry?.sock || entry.status !== "connected") continue;
-      logger.info({
-        campaignId: c.id,
-        sessionPhone: entry.phone,
-        pushname: entry.pushname,
-        haithemUsed: normalizeDigits(entry.phone) === HAITHEM_PHONE_DIGITS,
-      }, "[TICK] Campaign routed to sending session");
-
-      const ratePerMin = Number(stats.ratePerMin || 15);
-      const tickRate = Math.ceil(ratePerMin / 4); // rate for 15s interval
-      const cursor = Number(stats.dispatchCursor || 0);
-      const recipientIds = Array.isArray(audience.recipientIds) ? audience.recipientIds : [];
-
-      if (cursor >= recipientIds.length && recipientIds.length > 0) {
-        await supabaseRest(`/campaigns?id=eq.${c.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ status: "done" })
-        });
-        continue;
-      }
-
-      const batchIds = recipientIds.slice(cursor, cursor + tickRate);
-      if (batchIds.length === 0) continue;
-
-      let sentCount = 0;
-      let failedCount = 0;
-
-      const cleanBatchIds = batchIds.join(',');
-      const contacts = await supabaseRest(`/contacts?id=in.(${encodeURIComponent(cleanBatchIds)})&select=id,phone,name`);
-
-      if (Array.isArray(contacts)) {
-        for (const contactId of batchIds) {
-          const contact = contacts.find(row => row.id === contactId);
-          if (!contact || !contact.phone) {
-            logger.warn({ contactId, found: !!contact, phone: contact?.phone }, "[TICK] Contact not found or missing phone");
-            failedCount++;
-            continue;
-          }
-
-          const jid = resolveSendJid(contact.phone);
-          if (!jid) {
-            logger.warn({ contactId, phone: contact.phone }, "[TICK] Invalid JID");
-            failedCount++;
-            continue;
-          }
-
-          let text = String(c.content ?? "").replace(/\{\{prenom\}\}/gi, (contact.name || "").split(' ')[0]);
-
-          try {
-            const [presence] = await entry.sock.onWhatsApp(jid).catch(() => []);
-            if (presence && presence.exists === false) {
-              failedCount++;
-              continue;
-            }
-            const sendTs = Date.now();
-            const out = await entry.sock.sendMessage(jid, { text });
-            sentCount++;
-            logger.info({ jid, campaignId: c.id }, "campaign message sent");
-
-            const liveSessionId = Object.keys(Object.fromEntries(sessions.entries())).find(k => sessions.get(k) === entry);
-            if (liveSessionId) {
-              const msgId = out?.key?.id ?? `${liveSessionId}_${sendTs}_${Math.random().toString(36).slice(2, 8)}`;
-              const peerPhone = jidToPhone(jid) ?? contact.phone;
-              pushEvent(liveSessionId, {
-                id: msgId,
-                type: "message",
-                direction: "out",
-                sessionId: liveSessionId,
-                from: entry.phone ?? "",
-                to: peerPhone,
-                body: text,
-                pushName: undefined,
-                at: sendTs,
-              });
-            }
-
-            persistRuntimeMessageDirect(c.org_id, {
-              sessionId: audience.bridgeSessionId ?? liveSessionId,
-              sessionName: entry.pushname ?? entry.phone ?? "Session campagne",
-              sessionPhone: entry.phone,
-              sessionStatus: entry.status ?? "connected",
-              contact: {
-                id: contact.id,
-                name: contact.name?.trim() || `Contact ${normalizeDigits(contact.phone).slice(-4)}`,
-                phone: formatPhone(contact.phone),
-                tags: ["WhatsApp"],
-                consent: true,
-                stage: "prospect",
-                score: 0,
-              },
-              message: {
-                direction: "out",
-                body: text,
-                at: sendTs,
-                status: "sent",
-              },
-            }).catch((persistErr) => {
-              logger.warn({ persistErr, campaignId: c.id, contactId: contact.id }, "Failed to persist outgoing campaign message to DB");
-            });
-
-            await new Promise(resolve => setTimeout(resolve, 1500));
-          } catch (err) {
-            logger.error({ err, jid, campaignId: c.id }, "failed to send campaign msg");
-            failedCount++;
-          }
-        }
-      } else {
-        logger.warn({ cleanBatchIds, contacts }, "[TICK] supabaseRest returned non-array for contacts");
-        failedCount += batchIds.length;
-      }
-
-      const newCursor = cursor + batchIds.length;
-      const newSent = Number(stats.sent || 0) + sentCount;
-      const newFailed = Number(stats.failed || 0) + failedCount;
-
-      await supabaseRest(`/campaigns?id=eq.${c.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          stats: {
-            ...stats,
-            dispatchCursor: newCursor,
-            sent: newSent,
-            failed: newFailed,
-            delivered: newSent
-          }
-        })
-      });
-    }
-  } catch (err) {
-    logger.error({ err }, "tickCampaigns failed");
-  }
-}
-
-setInterval(tickCampaigns, 15000);
-
-const OPENAI_API_KEY = "sk-XuaBdA0QXNP3mafkjJr5q3bBbfIdmkRIyhzaOEZrxm7xwaqs";
-
-// ==== BACKGROUND WORKER: AUTO-WAKE SESSIONS ====
-async function autoWakeSessions() {
-  if (!SUPABASE_SERVICE_ROLE_KEY) return;
-  try {
-    const rows = await supabaseRest("/sessions_qr?status=eq.connected&select=device");
-    if (Array.isArray(rows)) {
-      for (const row of rows) {
-        const bridgeId = bridgeIdFromSessionRow(row);
-        if (bridgeId && !sessions.has(bridgeId)) {
-          logger.info({ bridgeId }, "Auto-waking connected session on boot");
-          await startSession(bridgeId).catch(() => { });
-        }
-      }
-    }
-  } catch (e) {
-    logger.error({ err: e }, "autoWakeSessions failed");
-  }
-}
-autoWakeSessions();
-
-const ROUTER_DEPARTMENTS = {
-  commercial: {
-    label: "Commercial",
-    prompt: "Tu es l'agent Commercial. Tu gères les prospects, les devis, les remises sur volume, les demandes B2B et la negociation tarifaire."
-  },
-  vente: {
-    label: "Vente",
-    prompt: "Tu es l'agent Vente. Tu aides le client a choisir, tu expliques clairement l'offre et tu fais avancer la commande sans inventer d'informations."
-  },
-  achat: {
-    label: "Achat",
-    prompt: "Tu es l'agent Achat. Tu traites les questions fournisseurs, disponibilites d'approvisionnement et demandes d'achat internes."
-  },
-  livraison: {
-    label: "Livraison",
-    prompt: "Tu es l'agent Livraison. Tu aides sur le suivi de commande, l'adresse, les retards et les questions de distribution."
-  },
-  logistique: {
-    label: "Logistique",
-    prompt: "Tu es l'agent Logistique. Tu traites le stock, la disponibilite, la preparation et la coordination operationnelle."
-  },
-  paiement: {
-    label: "Paiement",
-    prompt: "Tu es l'agent Paiement. Tu geres facture, paiement, confirmation et points financiers sans jamais confirmer une operation sans preuve."
-  },
-  sav: {
-    label: "SAV",
-    prompt: "Tu es l'agent SAV. Tu traites les reclamations avec empathie, tu qualifies le probleme et tu proposes la prochaine etape la plus utile."
-  },
-  information: {
-    label: "Information",
-    prompt: "Tu es l'agent Information. Tu reponds aux questions generales sur l'entreprise, les horaires et les informations non sensibles."
-  },
-  human_support: {
-    label: "Support humain",
-    prompt: "Tu es l'agent de Support humain. Tu n'essaies pas de resoudre toi-meme un cas ambigu ou sensible: tu qualifies et tu transfers proprement."
-  }
-};
-
-function containsArabicScript(text) {
-  return /[\u0600-\u06FF]/.test(String(text ?? ""));
-}
-
-function detectReplyLanguage(text, preferredLanguage) {
-  const preferred = String(preferredLanguage ?? "").trim();
-  if (preferred) return preferred;
-
-  const raw = String(text ?? "");
-  const t = raw.toLowerCase();
-  const tunisianLatin = /(aslema|slm|salam|salem|brabi|chnowa|chnowa|ch7al|n7eb|mte3i|mt3i|win|weslet|waktach|wa9tach|ya3mlouli|ena|mazel|mazel ma|livreur)/i;
-  const german = /\b(ich|möchte|moechte|stück|stueck|preis|angebot|lieferung|rechnung|zahlung|bestellen|haben sie)\b/i;
-  const english = /\b(hello|hi|price|order|delivery|invoice|payment|stock|support|quote|pieces)\b/i;
-
-  if (containsArabicScript(raw)) return "ar-TN";
-  if (tunisianLatin.test(t)) return "ar-TN";
-  if (german.test(t)) return "de";
-  if (english.test(t)) return "en";
-  return "fr";
-}
-
-function extractRoutingEntities(text) {
-  const raw = String(text ?? "");
-  const quantityMatch = raw.match(/\b(\d+)\s*(pieces?|pi[eè]ces?|pcs?|units?|unit[eé]s?|stück|stueck)\b/i) || raw.match(/\b(\d+)\b/);
-  const orderMatch = raw.match(/\b(?:cmd|commande|order|bestellung)[-:\s#]*([a-z0-9-]{3,})\b/i) || raw.match(/\b\d{4,}\b/);
-  const productMatch = raw.match(/\b(?:modele|model|produit|product|article|ref)[-:\s#]*([a-z0-9][a-z0-9 _-]{1,40})\b/i);
-
-  return {
-    order_number: orderMatch ? String(orderMatch[1] ?? orderMatch[0]).trim() : null,
-    quantity: quantityMatch ? Number(quantityMatch[1]) : null,
-    product_hint: productMatch ? String(productMatch[1] ?? "").trim() : null,
-  };
-}
-
-function detectUrgencyAndSentiment(text) {
-  const t = String(text ?? "").toLowerCase();
-  const urgent = /(urgent|vite|rapidement|aujourd'hui|today|asap|responsable|plainte|complaint|reclamation|chauffeur|retard|problem|probl[eè]me|mazel ma|waktach|wa9tach)/i.test(t);
-  const negative = /(probl[eè]me|panne|cass[eé]|retard|reclamation|remboursement|angry|not happy|livreur|mazel ma|mech mawsel|mouch mawsel)/i.test(t);
-  const positive = /(merci|thanks|perfect|parfait|top|good|super)/i.test(t);
-
-  return {
-    urgency: urgent ? "high" : "normal",
-    sentiment: negative ? "negative" : (positive ? "positive" : "neutral"),
-  };
-}
-
-function fallbackRouteAgentForText(text, context = {}) {
-  const t = String(text ?? "").toLowerCase();
-  const entities = extractRoutingEntities(text);
-  const { urgency, sentiment } = detectUrgencyAndSentiment(text);
-  const language = detectReplyLanguage(text, context?.state?.preferredLanguage || context?.customer?.preferredLanguage);
-
-  let department = "information";
-  let intent = "general_information";
-  let confidence = 0.72;
-  let humanRequired = false;
-
-  if (/(human|humain|agent|conseiller|responsable|operator|support humain)/i.test(t)) {
-    department = "human_support";
-    intent = "human_handoff";
-    confidence = 0.95;
-    humanRequired = true;
-  } else if (/(devis|quote|quotation|angebot|grossiste|gros|wholesale|meilleur prix|better price|remise|discount|50 stück|50 stueck|50 pieces)/i.test(t)) {
-    department = "commercial";
-    intent = "quote_negotiation";
-    confidence = 0.9;
-  } else if (/(livraison|delivery|colis|commande|order|bestellung|suivi|track|retard|livreur|weslet|waktach|wa9tach)/i.test(t)) {
-    department = "livraison";
-    intent = entities.order_number ? "delivery_tracking" : "delivery_question";
-    confidence = entities.order_number ? 0.9 : 0.82;
-  } else if (/(prix|price|combien|tarif|catalogue|catalog|acheter|buy|promo|promotion)/i.test(t)) {
-    department = "vente";
-    intent = "sales_inquiry";
-    confidence = 0.84;
-  } else if (/(stock|dispo|disponible|availability|available|preparation|logistique|warehouse)/i.test(t)) {
-    department = "logistique";
-    intent = "stock_check";
-    confidence = 0.84;
-  } else if (/(fournisseur|supplier|approvisionnement|procurement|achat)/i.test(t)) {
-    department = "achat";
-    intent = "procurement_request";
-    confidence = 0.84;
-  } else if (/(paiement|payment|facture|invoice|virement|versement|reglement|paid)/i.test(t)) {
-    department = "paiement";
-    intent = "payment_question";
-    confidence = 0.86;
-  } else if (/(sav|support|panne|cass[eé]|broken|retour|return|refund|remboursement|problem|probl[eè]me|reclamation)/i.test(t)) {
-    department = "sav";
-    intent = "support_request";
-    confidence = 0.88;
-    if (sentiment === "negative" && urgency === "high") humanRequired = true;
-  }
-
-  return {
-    language,
-    reply_language: language,
-    intent,
-    department,
-    entities,
-    urgency,
-    sentiment,
-    confidence,
-    human_required: humanRequired,
-  };
-}
-
-function sanitizeRouteAnalysis(candidate, fallback) {
-  const department = String(candidate?.department ?? fallback.department).toLowerCase();
-  const safeDepartment = ROUTER_DEPARTMENTS[department] ? department : fallback.department;
-  const confidence = Number(candidate?.confidence);
-  const language = detectReplyLanguage(candidate?.language || fallback.language, fallback.reply_language);
-  const replyLanguage = detectReplyLanguage(candidate?.reply_language || language, fallback.reply_language);
-
-  return {
-    language,
-    reply_language: replyLanguage,
-    intent: String(candidate?.intent ?? fallback.intent),
-    department: safeDepartment,
-    entities: {
-      ...fallback.entities,
-      ...(candidate?.entities && typeof candidate.entities === "object" ? candidate.entities : {}),
-    },
-    urgency: String(candidate?.urgency ?? fallback.urgency) === "high" ? "high" : "normal",
-    sentiment: ["positive", "negative", "neutral"].includes(String(candidate?.sentiment ?? "")) ? String(candidate.sentiment) : fallback.sentiment,
-    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback.confidence,
-    human_required: Boolean(candidate?.human_required ?? fallback.human_required),
-  };
-}
-
-async function routeAgentForText(text, context = {}) {
-  const fallback = fallbackRouteAgentForText(text, context);
-
-  if (!OPENAI_API_KEY) {
-    return fallback;
-  }
-
-  try {
-    const out = await fetch("https://api.moonshot.cn/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + OPENAI_API_KEY },
-      body: JSON.stringify({
-        model: "moonshot-v1-8k",
-        temperature: 0.1,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: [
-              "You are the central router for a multilingual WhatsApp CRM.",
-              "Understand mixed French, English, German, Arabic, Tunisian Arabic, Latin Tunisian, and Arabizi.",
-              "Return JSON only with keys: language, reply_language, intent, department, entities, urgency, sentiment, confidence, human_required.",
-              "Valid department values: commercial, vente, achat, livraison, logistique, paiement, sav, information, human_support.",
-              "Never answer the customer. Only classify and extract."
-            ].join(" ")
-          },
-          {
-            role: "user",
-            content: JSON.stringify({
-              text,
-              customer: context?.customer ?? null,
-              state: context?.state ?? null,
-              recentMessages: Array.isArray(context?.recentMessages) ? context.recentMessages.slice(-8) : [],
-            })
-          }
-        ]
-      })
-    });
-    const data = await out.json();
-    const rawContent = data?.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(rawContent);
-    return sanitizeRouteAnalysis(parsed, fallback);
-  } catch (e) {
-    logger.error({ err: e }, "AI Routing failed, using fallback");
-    return fallback;
-  }
-}
-
-async function buildCustomerAiContext(orgId, contactRow) {
-  const context = {
-    customer: {
-      id: contactRow?.id ?? null,
-      name: contactRow?.name ?? null,
-      phone: contactRow?.phone ?? null,
-      stage: contactRow?.stage ?? null,
-      tags: Array.isArray(contactRow?.tags) ? contactRow.tags : [],
-      preferredLanguage: null,
-      score: 0,
-      segment: null,
-      consent_marketing: null,
-      unsubscribed: false,
-      notes: null,
-      created_at: null,
-    },
-    state: {},
-    recentMessages: [],
-    conversation: null,
-    extended: null,
-  };
-
-  if (!orgId || !contactRow?.id) return context;
-
-  try {
-    const conversations = await supabaseRest(
-      `/conversations?org_id=eq.${orgId}&contact_id=eq.${contactRow.id}&select=id,last_message_at,created_at,status,unread_count,assignee_id&order=last_message_at.desc&limit=1`,
-    );
-    const conversationId = Array.isArray(conversations) && conversations[0]?.id ? conversations[0].id : null;
-    const convRow = Array.isArray(conversations) ? (conversations[0] ?? null) : null;
-    if (convRow) {
-      context.conversation = {
-        id: convRow.id,
-        status: convRow.status ?? null,
-        unread_count: Number(convRow.unread_count ?? 0),
-        last_message_at: convRow.last_message_at ?? null,
-        created_at: convRow.created_at ?? null,
-        assignee_id: convRow.assignee_id ?? null,
-      };
-      context.state.conversation_id = convRow.id;
-    }
-
-    const extended = await lookupContactExtendedData(orgId, contactRow);
-    if (extended) {
-      context.extended = extended;
-      context.customer.stage = extended.stage ?? context.customer.stage;
-      context.customer.tags = Array.isArray(extended.tags) ? extended.tags : context.customer.tags;
-      context.customer.score = extended.score;
-      context.customer.segment = extended.segment;
-      context.customer.consent_marketing = extended.consent_marketing;
-      context.customer.unsubscribed = extended.unsubscribed;
-      context.customer.notes = extended.notes;
-      context.customer.created_at = extended.created_at;
-    }
-
-    if (!conversationId) return context;
-
-    const recentMessages = await supabaseRest(
-      `/messages?conversation_id=eq.${conversationId}&select=direction,body,created_at,status&order=created_at.desc&limit=12`,
-    );
-    const orderedMessages = Array.isArray(recentMessages) ? [...recentMessages].reverse() : [];
-    context.recentMessages = orderedMessages.map((row) => ({
-      direction: row.direction === "out" ? "out" : "in",
-      body: String(row.body ?? "").trim(),
-      created_at: row.created_at ?? null,
-      status: row.status ?? null,
-    })).filter((row) => row.body);
-
-    const inboundText = context.recentMessages
-      .filter((row) => row.direction === "in")
-      .map((row) => row.body)
-      .join(" ");
-    const combined = `${inboundText} ${contactRow?.name ?? ""}`.trim();
-    const entities = extractRoutingEntities(combined);
-
-    context.customer.preferredLanguage = detectReplyLanguage(inboundText || contactRow?.name || "");
-    context.state = {
-      ...context.state,
-      preferredLanguage: context.customer.preferredLanguage,
-      order_number: entities.order_number ?? null,
-      quantity: entities.quantity ?? null,
-      product_hint: entities.product_hint ?? null,
-      last_customer_message: context.recentMessages.length > 0 ? context.recentMessages[context.recentMessages.length - 1].body : null,
-    };
-  } catch (err) {
-    logger.warn({ err, contactId: contactRow?.id }, "Failed to build customer AI context");
-  }
-
-  return context;
-}
-
-function departmentToAgentKey(department) {
-  const d = String(department ?? "").toLowerCase();
-  if (d === "commercial" || d === "vente") return "sales";
-  if (d === "sav") return "support";
-  if (d === "human_support") return "supervisor";
-  if (d === "information") return "analyst";
-  if (d === "paiement") return "support";
-  if (d === "livraison" || d === "logistique") return "support";
-  return "analyst";
-}
-
-async function findActiveAiAgent(orgId, department) {
-  if (!orgId) return null;
-  const key = departmentToAgentKey(department);
-  const rows = await supabaseRest(
-    `/ai_agents?org_id=eq.${orgId}&active=eq.true&key=eq.${encodeURIComponent(key)}&select=id,key,name,mode,threshold,config&limit=1`
-  ).catch(() => []);
-  return Array.isArray(rows) ? (rows[0] ?? null) : null;
-}
-
-function extractLookupTokens(text, route, context) {
-  const bag = new Set();
-  const push = (value) => {
-    const s = String(value ?? "").trim();
-    if (!s) return;
-    if (s.length < 3) return;
-    bag.add(s);
-  };
-
-  push(route?.entities?.order_number);
-  push(route?.entities?.product_hint);
-  push(context?.state?.order_number);
-  push(context?.state?.product_hint);
-
-  for (const match of String(text ?? "").matchAll(/\b[a-z0-9-]{3,}\b/gi)) {
-    const token = String(match[0] ?? "").trim();
-    if (/^\d{1,2}$/.test(token)) continue;
-    push(token);
-    if (bag.size >= 8) break;
-  }
-
-  return Array.from(bag);
-}
-
-async function lookupInvoicesForRoute(orgId, text, route, context) {
-  if (!orgId) return [];
-  const candidates = extractLookupTokens(text, route, context);
-  const hits = [];
-  const seen = new Set();
-
-  for (const token of candidates) {
-    const rows = await supabaseRest(
-      `/invoices?org_id=eq.${orgId}&number=ilike.${encodeURIComponent(`*${token}*`)}&select=id,number,amount,currency,status,created_at&period_start,period_end&order=created_at.desc&limit=3`
-    ).catch(() => []);
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows) {
-      if (!row?.id || seen.has(row.id)) continue;
-      seen.add(row.id);
-      hits.push(row);
-      if (hits.length >= 5) return hits;
-    }
-  }
-
-  return hits;
-}
-
-async function searchKnowledgeDocsForRoute(orgId, text, route, context) {
-  if (!orgId) return [];
-  const candidates = extractLookupTokens(text, route, context)
-    .map((token) => token.toLowerCase())
-    .filter((token) => token.length >= 4)
-    .slice(0, 4);
-  const hits = [];
-  const seen = new Set();
-
-  for (const token of candidates) {
-    const rows = await supabaseRest(
-      `/knowledge_docs?org_id=eq.${orgId}&title=ilike.${encodeURIComponent(`*${token}*`)}&select=id,title,type,status,version,chunks,created_at&order=created_at.desc&limit=5`
-    ).catch(() => []);
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows) {
-      if (!row?.id || seen.has(row.id)) continue;
-      seen.add(row.id);
-      hits.push(row);
-      if (hits.length >= 5) return hits;
-    }
-  }
-
-  return hits;
-}
-
-async function lookupContactExtendedData(orgId, contactRow) {
-  if (!orgId || !contactRow?.id) return null;
-  try {
-    const rows = await supabaseRest(
-      `/contacts?id=eq.${contactRow.id}&org_id=eq.${orgId}&select=id,org_id,phone,name,stage,score,tags,segment,consent_marketing,unsubscribed,notes,created_at&limit=1`
-    ).catch(() => []);
-    if (!Array.isArray(rows) || !rows[0]) return null;
-    const c = rows[0];
-    return {
-      id: c.id,
-      stage: c.stage ?? null,
-      score: Number(c.score ?? 0),
-      segment: c.segment ?? null,
-      consent_marketing: Boolean(c.consent_marketing),
-      unsubscribed: Boolean(c.unsubscribed),
-      notes: String(c.notes ?? "").trim(),
-      tags: Array.isArray(c.tags) ? c.tags : [],
-      created_at: c.created_at ?? null,
-    };
-  } catch (err) {
-    logger.warn({ err, contactId: contactRow?.id }, "lookupContactExtendedData failed");
-    return null;
-  }
-}
-
-async function lookupCustomerInvoicesByContact(orgId, contactRow, text, route, context) {
-  if (!orgId || !contactRow?.id) return [];
-  const direct = await lookupInvoicesForRoute(orgId, text, route, context);
-  if (Array.isArray(direct) && direct.length > 0) return direct;
-  const tokens = new Set();
-  const nameWords = String(contactRow?.name ?? "").split(/\s+/).filter(w => w.length >= 3);
-  for (const w of nameWords) tokens.add(w);
-  const phoneTail = normalizeDigits(contactRow?.phone ?? "").slice(-4);
-  if (phoneTail) tokens.add(phoneTail);
-  if (tokens.size === 0) return [];
-  const hits = [];
-  const seen = new Set();
-  for (const token of tokens) {
-    const rows = await supabaseRest(
-      `/invoices?org_id=eq.${orgId}&number=ilike.${encodeURIComponent(`*${token}*`)}&select=id,number,plan,amount,currency,status,period_start,period_end,created_at&order=created_at.desc&limit=3`
-    ).catch(() => []);
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows) {
-      if (!row?.id || seen.has(row.id)) continue;
-      seen.add(row.id);
-      hits.push(row);
-      if (hits.length >= 5) return hits;
-    }
-  }
-  return hits;
-}
-
-async function lookupCustomerCampaigns(orgId, contactRow) {
-  if (!orgId || !contactRow?.id) return [];
-  try {
-    const contactIdStr = String(contactRow.id);
-    const rows = await supabaseRest(
-      `/campaigns?org_id=eq.${orgId}&status=in.(running,done,paused,stopped)&select=id,name,goal,status,stop_on_reply,stats,created_at,scheduled_at&order=created_at.desc&limit=20`
-    ).catch(() => []);
-    if (!Array.isArray(rows) || rows.length === 0) return [];
-    const involved = [];
-    for (const c of rows) {
-      const audience = (c.audience && typeof c.audience === "object") ? c.audience : {};
-      const recipientIdsRaw = Array.isArray(audience.recipientIds) ? audience.recipientIds : [];
-      const recipientStrings = recipientIdsRaw.map(x => String(x));
-      const stats = (c.stats && typeof c.stats === "object") ? c.stats : {};
-      const repliedIds = Array.isArray(stats.replied_contact_ids) ? stats.replied_contact_ids.map(x => String(x)) : [];
-      if (!recipientStrings.includes(contactIdStr) && !repliedIds.includes(contactIdStr)) continue;
-      involved.push({
-        id: c.id,
-        name: c.name,
-        goal: c.goal ?? null,
-        status: c.status,
-        scheduled_at: c.scheduled_at ?? null,
-        created_at: c.created_at ?? null,
-        repliesCount: Number(stats.replies ?? 0),
-        contactReplied: repliedIds.includes(contactIdStr),
-        stop_on_reply: Boolean(c.stop_on_reply),
-      });
-      if (involved.length >= 8) break;
-    }
-    return involved;
-  } catch (err) {
-    logger.warn({ err, contactId: contactRow?.id }, "lookupCustomerCampaigns failed");
-    return [];
-  }
-}
-
-async function lookupConversationStats(orgId, contactRow) {
-  if (!orgId || !contactRow?.id) return null;
-  try {
-    const convs = await supabaseRest(
-      `/conversations?org_id=eq.${orgId}&contact_id=eq.${contactRow.id}&select=id,status,unread_count,last_message_at,created_at,assignee_id&order=last_message_at.desc&limit=5`
-    ).catch(() => []);
-    if (!Array.isArray(convs) || convs.length === 0) return null;
-    const primary = convs[0];
-    let totalMessages = 0;
-    let outCount = 0;
-    let inCount = 0;
-    const msgRows = await supabaseRest(
-      `/messages?conversation_id=eq.${primary.id}&select=direction&limit=500`
-    ).catch(() => []);
-    if (Array.isArray(msgRows)) {
-      totalMessages = msgRows.length;
-      outCount = msgRows.filter(m => m.direction === "out").length;
-      inCount = msgRows.filter(m => m.direction === "in").length;
-    }
-    return {
-      conversation_id: primary.id,
-      conversation_status: primary.status,
-      unread_count: Number(primary.unread_count ?? 0),
-      last_message_at: primary.last_message_at ?? null,
-      conversation_created_at: primary.created_at ?? null,
-      assignee_id: primary.assignee_id ?? null,
-      total_conversations: convs.length,
-      total_messages: totalMessages,
-      messages_in: inCount,
-      messages_out: outCount,
-    };
-  } catch (err) {
-    logger.warn({ err, contactId: contactRow?.id }, "lookupConversationStats failed");
-    return null;
-  }
-}
-
-async function lookupRecentAiSuggestions(orgId, contactRow, conversationStats) {
-  if (!orgId) return [];
-  const convId = conversationStats?.conversation_id;
-  try {
-    const endpoint = convId
-      ? `/ai_suggestions?org_id=eq.${orgId}&conversation_id=eq.${convId}&select=id,body,confidence,status,created_at,agent_id&order=created_at.desc&limit=5`
-      : `/ai_suggestions?org_id=eq.${orgId}&select=id,body,confidence,status,created_at,agent_id&order=created_at.desc&limit=5`;
-    const rows = await supabaseRest(endpoint).catch(() => []);
-    return Array.isArray(rows) ? rows : [];
-  } catch (err) {
-    logger.warn({ err }, "lookupRecentAiSuggestions failed");
-    return [];
-  }
-}
-
-async function listActiveAiAgents(orgId) {
-  if (!orgId) return [];
-  try {
-    const rows = await supabaseRest(
-      `/ai_agents?org_id=eq.${orgId}&active=eq.true&select=id,key,name,mode,threshold,config`
-    ).catch(() => []);
-    return Array.isArray(rows) ? rows : [];
-  } catch (err) {
-    logger.warn({ err }, "listActiveAiAgents failed");
-    return [];
-  }
-}
-
-async function buildRouterToolsContext(orgId, contactRow, text, route, context) {
-  const activeAgent = await findActiveAiAgent(orgId, route?.department);
-  const invoices = await lookupCustomerInvoicesByContact(orgId, contactRow, text, route, context);
-  const knowledgeDocs = ["information", "commercial", "vente", "logistique", "achat"].includes(String(route?.department ?? ""))
-    ? await searchKnowledgeDocsForRoute(orgId, text, route, context)
-    : [];
-  const extendedContact = await lookupContactExtendedData(orgId, contactRow);
-  const customerCampaigns = await lookupCustomerCampaigns(orgId, contactRow);
-  const conversationStats = await lookupConversationStats(orgId, contactRow);
-  const recentSuggestions = await lookupRecentAiSuggestions(orgId, contactRow, conversationStats);
-  const allActiveAgents = await listActiveAiAgents(orgId);
-
-  return {
-    activeAgent: activeAgent ? {
-      id: activeAgent.id,
-      key: activeAgent.key,
-      name: activeAgent.name,
-      mode: activeAgent.mode,
-      threshold: Number(activeAgent.threshold ?? 85),
-      config: activeAgent.config ?? {},
-    } : null,
-    allActiveAgents: Array.isArray(allActiveAgents) ? allActiveAgents.map(a => ({
-      id: a.id, key: a.key, name: a.name, mode: a.mode, threshold: Number(a.threshold ?? 85),
-    })) : [],
-    customerProfile: {
-      id: contactRow?.id ?? null,
-      name: contactRow?.name ?? null,
-      phone: contactRow?.phone ?? null,
-      tags: Array.isArray(contactRow?.tags) ? contactRow.tags : [],
-      lastKnownLanguage: context?.customer?.preferredLanguage ?? null,
-      recentMessageCount: Array.isArray(context?.recentMessages) ? context.recentMessages.length : 0,
-      stage: extendedContact?.stage ?? contactRow?.stage ?? null,
-      score: extendedContact?.score ?? 0,
-      segment: extendedContact?.segment ?? null,
-      consent_marketing: extendedContact?.consent_marketing ?? null,
-      unsubscribed: extendedContact?.unsubscribed ?? false,
-      notes: extendedContact?.notes ?? null,
-      contact_created_at: extendedContact?.created_at ?? null,
-    },
-    invoices: Array.isArray(invoices) ? invoices : [],
-    knowledgeDocs: Array.isArray(knowledgeDocs) ? knowledgeDocs : [],
-    campaigns: Array.isArray(customerCampaigns) ? customerCampaigns : [],
-    conversation: conversationStats ? {
-      id: conversationStats.conversation_id,
-      status: conversationStats.conversation_status,
-      unread_count: conversationStats.unread_count,
-      last_message_at: conversationStats.last_message_at,
-      created_at: conversationStats.conversation_created_at,
-      assignee_id: conversationStats.assignee_id,
-      total_conversations: conversationStats.total_conversations,
-      total_messages: conversationStats.total_messages,
-      messages_in: conversationStats.messages_in,
-      messages_out: conversationStats.messages_out,
-    } : null,
-    recentSuggestions: Array.isArray(recentSuggestions) ? recentSuggestions.map(s => ({
-      id: s.id,
-      status: s.status,
-      confidence: Number(s.confidence ?? 0),
-      created_at: s.created_at,
-      agent_id: s.agent_id,
-      preview: String(s.body ?? "").slice(0, 160),
-    })) : [],
-  };
-}
-
-async function persistAiSuggestionForRoute(orgId, route, context, toolsContext, answer, text) {
-  if (!orgId || !route) return null;
-
-  const threshold = Number(toolsContext?.activeAgent?.threshold ?? 85);
-  const confidencePct = Number(route.confidence ?? 0) * 100;
-  const needsHuman = Boolean(route.human_required) || confidencePct < threshold;
-
-  const conversationId = context?.conversation?.id ?? context?.state?.conversation_id ?? toolsContext?.conversation?.id ?? null;
-  const agentId = toolsContext?.activeAgent?.id ?? null;
-  const department = String(route.department ?? "information").toLowerCase();
-
-  const summaryBody = needsHuman
-    ? buildTransferReply(route.reply_language || "fr")
-    : String(answer ?? "").trim();
-
-  const meta = {
-    department,
-    intent: route.intent ?? null,
-    urgency: route.urgency ?? null,
-    sentiment: route.sentiment ?? null,
-    confidence_pct: confidencePct,
-    threshold_agent: threshold,
-    human_required: needsHuman,
-    human_reason: route.human_required
-      ? "flagged_by_router"
-      : (confidencePct < threshold ? `below_agent_threshold_${threshold}` : null),
-    entities: route.entities ?? null,
-    customer_id: toolsContext?.customerProfile?.id ?? null,
-    conversation_id: conversationId,
-    matched_campaigns: Array.isArray(toolsContext?.campaigns) ? toolsContext.campaigns.map(c => c.id) : [],
-    matched_invoices: Array.isArray(toolsContext?.invoices) ? toolsContext.invoices.map(i => i.id) : [],
-    recent_suggestions_count: Array.isArray(toolsContext?.recentSuggestions) ? toolsContext.recentSuggestions.length : 0,
-    incoming_preview: String(text ?? "").slice(0, 400),
-  };
-
-  try {
-    const created = await supabaseRest("/ai_suggestions", {
-      method: "POST",
-      headers: { Prefer: "return=representation" },
-      body: JSON.stringify({
-        org_id: orgId,
-        conversation_id: conversationId,
-        agent_id: agentId,
-        body: summaryBody,
-        confidence: Number(route.confidence ?? 0),
-        status: needsHuman ? "pending" : "pending",
-      }),
-    }).catch((err) => {
-      logger.warn({ err, orgId, department }, "Failed to persist AI suggestion");
-      return [];
-    });
-    const suggestionId = Array.isArray(created) && created[0]?.id ? created[0].id : null;
-    logger.info(
-      { suggestionId, orgId, department, needsHuman, confidencePct, threshold, conversationId, agentId },
-      needsHuman ? "AI handoff suggestion persisted" : "AI suggestion persisted for review"
-    );
-    return { suggestionId, needsHuman, threshold, confidencePct, meta };
-  } catch (e) {
-    logger.warn({ err: e, orgId, department }, "persistAiSuggestionForRoute crashed");
-    return null;
-  }
-}
-
-function buildTransferReply(replyLanguage) {
-  if (replyLanguage === "ar-TN" || replyLanguage === "ar") {
-    return "عسلامة. باش نحوّل طلبك لمستشار بش يتابع معاك بطريقة أدق، خاطر نحب نعطيك معلومة صحيحة ومؤكدة.";
-  }
-  if (replyLanguage === "de") {
-    return "Gerne. Ich leite Ihre Anfrage an einen Berater weiter, damit Sie eine sichere und genaue Antwort bekommen.";
-  }
-  if (replyLanguage === "en") {
-    return "Sure. I am forwarding your request to a human advisor so you get a precise and reliable answer.";
-  }
-  return "Bien reçu. Je transfere votre demande a un conseiller humain pour vous donner une reponse fiable et precise.";
-}
-
-function buildFallbackAnswer(text, route, context = {}) {
-  const lang = route?.reply_language || "fr";
-  const intent = route?.intent || "general_information";
-  const invoice = Array.isArray(context?.tools?.invoices) ? context.tools.invoices[0] : null;
-
-  if (route?.human_required || Number(route?.confidence ?? 0) < 0.6) {
-    return buildTransferReply(lang);
-  }
-
-  if (lang === "ar-TN" || lang === "ar") {
-    if (intent === "payment_question" && invoice?.number) {
-      return `تثبتّلك الفاتورة ${invoice.number}. الحالة متاعها ${invoice.status ?? "غير مؤكدة"} والمبلغ ${invoice.amount ?? "غير متوفر"} ${invoice.currency ?? "TND"}.`;
-    }
-    if (intent === "delivery_tracking") return "عسلامة. ابعثلي رقم الطلب متاعك ونثبتلك وضعية التوصيل متاعها كي نتأكد من المعطيات.";
-    if (intent === "sales_inquiry" || intent === "quote_negotiation") return "عسلامة. نجم نعاونك، اما ما نجمش نأكد سعر ولا stock من غير معطيات محدثة. ابعثلي اسم المنتج والكمية المطلوبة.";
-    if (intent === "payment_question") return "عسلامة. نجّم نعاونك في موضوع الخلاص، اما يلزمني رقم الطلب ولا رقم الفاتورة باش نتحقق.";
-    if (intent === "support_request") return "عسلامة. نحب نعاونك. ابعثلي رقم الطلب ووصف صغير للمشكل باش نوجّهك بالطريقة الصحيحة.";
-    return "عسلامة. وضّحلي طلبك شوية، واذا فيه طلب ولا منتج ابعثلي المرجع متاعو باش نجاوبك بشكل صحيح.";
-  }
-
-  if (lang === "de") {
-    if (intent === "payment_question" && invoice?.number) {
-      return `Ich habe die Rechnung ${invoice.number} gefunden. Status: ${invoice.status ?? "unbestaetigt"}, Betrag: ${invoice.amount ?? "n/a"} ${invoice.currency ?? "TND"}.`;
-    }
-    if (intent === "delivery_tracking") return "Gerne. Senden Sie mir bitte Ihre Bestellnummer, damit ich den Lieferstatus korrekt pruefen kann.";
-    if (intent === "sales_inquiry" || intent === "quote_negotiation") return "Gerne. Ich kann Ihnen helfen, aber ich bestaetige keinen Preis ohne aktuelle Daten. Bitte senden Sie Produkt und Menge.";
-    if (intent === "payment_question") return "Bitte senden Sie mir die Bestell- oder Rechnungsnummer, damit ich den Zahlungspunkt sauber pruefen kann.";
-    if (intent === "support_request") return "Beschreiben Sie mir bitte kurz das Problem und senden Sie wenn moeglich die Bestellnummer.";
-    return "Gerne. Praezisieren Sie bitte kurz Ihre Anfrage, damit ich Sie richtig weiterleiten oder beantworten kann.";
-  }
-
-  if (lang === "en") {
-    if (intent === "payment_question" && invoice?.number) {
-      return `I found invoice ${invoice.number}. Status: ${invoice.status ?? "unconfirmed"}, amount: ${invoice.amount ?? "n/a"} ${invoice.currency ?? "TND"}.`;
-    }
-    if (intent === "delivery_tracking") return "Sure. Please send me your order number so I can check the delivery status properly.";
-    if (intent === "sales_inquiry" || intent === "quote_negotiation") return "Sure. I can help, but I should not confirm price or stock without live data. Please send the product and quantity.";
-    if (intent === "payment_question") return "Please send your order or invoice number so I can clarify the payment topic correctly.";
-    if (intent === "support_request") return "Please share a short description of the issue and, if possible, your order number.";
-    return "Sure. Please give me a bit more detail so I can help you correctly.";
-  }
-
-  if (intent === "payment_question" && invoice?.number) {
-    return `J'ai retrouve la facture ${invoice.number}. Statut: ${invoice.status ?? "non confirme"}, montant: ${invoice.amount ?? "n/a"} ${invoice.currency ?? "TND"}.`;
-  }
-  if (intent === "delivery_tracking") return "Bien recu. Envoyez-moi votre numero de commande pour que je puisse verifier le suivi correctement.";
-  if (intent === "sales_inquiry" || intent === "quote_negotiation") return "Je peux vous aider, mais je ne dois pas confirmer un prix ou un stock sans donnees a jour. Envoyez-moi le produit et la quantite souhaitee.";
-  if (intent === "payment_question") return "Envoyez-moi le numero de commande ou de facture, et je clarifierai le point de paiement avec des informations fiables.";
-  if (intent === "support_request") return "Je suis la pour vous aider. Decrivez-moi brievement le probleme et ajoutez si possible le numero de commande.";
-  return `J'ai bien recu votre message. Precisez-moi juste le besoin principal pour que je vous reponde correctement: ${String(text ?? "").slice(0, 80)}`;
-}
-
-function buildAgentPrompt(route, context) {
-  const specialist = ROUTER_DEPARTMENTS[route.department] || ROUTER_DEPARTMENTS.information;
-  const tools = context?.tools ?? {};
-  const toolsBrief = [];
-
-  if (Array.isArray(tools.invoices) && tools.invoices.length > 0) {
-    toolsBrief.push(`FACTURES TROUVEES (${tools.invoices.length}): ${JSON.stringify(tools.invoices.slice(0, 3))}`);
-  }
-  if (Array.isArray(tools.campaigns) && tools.campaigns.length > 0) {
-    toolsBrief.push(`CAMPAGNES CLIENT (${tools.campaigns.length}): ${JSON.stringify(tools.campaigns.slice(0, 3))}`);
-  }
-  if (tools.conversation) {
-    toolsBrief.push(`RESUME_CONVERSATION: ${JSON.stringify(tools.conversation)}`);
-  }
-  if (Array.isArray(tools.recentSuggestions) && tools.recentSuggestions.length > 0) {
-    toolsBrief.push(`SUGGESTIONS_RECENTES (${tools.recentSuggestions.length})`);
-  }
-  if (Array.isArray(tools.knowledgeDocs) && tools.knowledgeDocs.length > 0) {
-    toolsBrief.push(`DOCS_BASE_CONNAISSANCE (${tools.knowledgeDocs.length}): ${JSON.stringify(tools.knowledgeDocs.slice(0, 2))}`);
-  }
-  if (tools.activeAgent) {
-    toolsBrief.push(`AGENT_ACTIF: ${JSON.stringify({ key: tools.activeAgent.key, name: tools.activeAgent.name, mode: tools.activeAgent.mode, threshold: tools.activeAgent.threshold })}`);
-  }
-
-  return [
-    "Tu es un agent intelligent de service client utilisé dans une application de communication WhatsApp professionnelle.",
-    "",
-    "## Objectif",
-    "Comprendre précisément le besoin du client et l'orienter vers le service approprié :",
-    "* commercial ;",
-    "* vente ;",
-    "* achat ;",
-    "* logistique ;",
-    "* livraison ;",
-    "* paiement ;",
-    "* service après-vente ;",
-    "* support ;",
-    "* information générale.",
-    "",
-    "## Directives Spécifiques",
-    specialist.prompt,
-    "",
-    "## Langues",
-    "Tu dois comprendre et utiliser naturellement :",
-    "* français ;",
-    "* anglais ;",
-    "* allemand ;",
-    "* arabe standard ;",
-    "* arabe tunisien ;",
-    "* tunisien écrit avec l'alphabet latin ;",
-    "* Arabizi utilisant notamment 2, 3, 5, 7 et 9 ;",
-    "* les messages mélangeant plusieurs langues.",
-    "",
-    "Ne corrige pas inutilement la langue du client.",
-    "Réponds normalement dans la langue ou le dialecte principalement utilisé par le client, sauf demande contraire.",
-    `Langue principale détectée du client : ${route.reply_language || "fr"}`,
-    "",
-    "## Règles fondamentales",
-    "Ne jamais inventer :",
-    "* un prix ;",
-    "* une promotion ;",
-    "* un stock ;",
-    "* une disponibilité ;",
-    "* un délai ;",
-    "* un état de commande ;",
-    "* une livraison ;",
-    "* une facture ;",
-    "* un paiement ;",
-    "* une garantie ;",
-    "* une politique commerciale ;",
-    "* une information concernant un client.",
-    "",
-    "Pour toutes les informations dynamiques, utilise obligatoirement les outils ou données mis à ta disposition.",
-    "Si l'information n'est pas disponible, indique clairement que tu ne peux pas la confirmer.",
-    "",
-    "## Compréhension du contexte",
-    "Analyse les messages précédents afin de comprendre les références telles que :",
-    "* celui-ci ;",
-    "* le même ;",
-    "* en noir ;",
-    "* deux autres ;",
-    "* la commande ;",
-    "* mon produit ;",
-    "* combien pour cinq ;",
-    "* وقتاش توصل ;",
-    "* موجودة ;",
-    "* نفس السلعة.",
-    "",
-    "Ne demande pas au client une information qu'il a déjà donnée dans la conversation.",
-    "",
-    "## Style",
-    "Sois professionnel, naturel, concis et serviable.",
-    "Évite les réponses robotiques.",
-    "Adapte le niveau de langage au client.",
-    "Pour le tunisien, utilise un tunisien naturel et compréhensible.",
-    "",
-    "## Outils",
-    "Lorsque la demande concerne des données réelles de l'entreprise, utilise les fonctions disponibles avant de répondre.",
-    "Exemples : recherche produit ; prix ; stock ; client ; commande ; paiement ; livraison ; devis ; support.",
-    "",
-    toolsBrief.length > 0 ? `RESULTATS DES OUTILS METIER EN BASE REELS (fiables, utilise-les d'abord) : ${toolsBrief.join(" | ")}` : "Aucun résultat d'outil métier attaché.",
-    "",
-    "## Sécurité commerciale",
-    "Ne confirme jamais une opération importante uniquement à partir d'une supposition.",
-    "Avant une opération sensible telle qu'une annulation, une modification d'adresse, un remboursement ou une modification importante de commande, vérifie les informations nécessaires.",
-    "",
-    "## Transfert humain",
-    "Transfère la conversation à un opérateur humain lorsque :",
-    "* le client le demande ;",
-    "* le niveau de confiance est insuffisant ;",
-    "* une réclamation importante est détectée ;",
-    "* une autorisation humaine est nécessaire ;",
-    "* aucune information fiable n'est disponible ;",
-    "* la situation sort de ton périmètre.",
-    "",
-    "L'objectif n'est pas de répondre à tout prix.",
-    "L'objectif est de donner une réponse correcte et utile.",
-    "",
-    route.human_required || route.confidence < 0.6
-      ? "🚨 ALERTE : Le cas doit être transféré à un humain. Réponds en annonçant ce transfert calmement au client."
-      : "Si l'information manque, pose uniquement la question minimale nécessaire, après avoir vérifié les outils.",
-    "",
-    "## État actuel du système",
-    `Routage courant : ${JSON.stringify(route)}`,
-    `Contexte client : ${JSON.stringify(context ?? {})}`,
-  ].join("\n");
-}
-
-async function craftAnswer(text, route, context) {
-  if (!OPENAI_API_KEY) {
-    return buildFallbackAnswer(text, route, context);
-  }
-
-  const tools = context?.tools ?? {};
-  const hasAnyToolHit = (
-    (Array.isArray(tools.invoices) && tools.invoices.length > 0)
-    || (Array.isArray(tools.campaigns) && tools.campaigns.length > 0)
-    || (Array.isArray(tools.knowledgeDocs) && tools.knowledgeDocs.length > 0)
-    || Boolean(tools.conversation)
-    || (Array.isArray(tools.recentSuggestions) && tools.recentSuggestions.length > 0)
-  );
-
-  try {
-    const out = await fetch("https://api.moonshot.cn/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + OPENAI_API_KEY },
-      body: JSON.stringify({
-        model: "moonshot-v1-8k",
-        temperature: route?.human_required ? 0.2 : 0.4,
-        messages: [
-          { role: "system", content: buildAgentPrompt(route, context) },
-          {
-            role: "user",
-            content: JSON.stringify({
-              message: text,
-              instruction: hasAnyToolHit
-                ? "Des resultats d'outils metier reels (factures, campagnes, conversation, docs connaissance) sont joints dans le contexte systeme. Base ta reponse exclusivement sur ces donnees reelles. Si une info manque malgre les outils, pose uniquement la question minimale."
-                : "Aucun resultat d'outil metier n'est attache a cette requete. Si la reponse depend de donnees metier dynamiques (factures, livraison, stock, campagnes), dis que tu ne peux pas confirmer et pose uniquement la question minimale.",
-              tools_attached: hasAnyToolHit ? {
-                invoices_count: Array.isArray(tools.invoices) ? tools.invoices.length : 0,
-                campaigns_count: Array.isArray(tools.campaigns) ? tools.campaigns.length : 0,
-                knowledge_count: Array.isArray(tools.knowledgeDocs) ? tools.knowledgeDocs.length : 0,
-                has_conversation: Boolean(tools.conversation),
-                suggestions_count: Array.isArray(tools.recentSuggestions) ? tools.recentSuggestions.length : 0,
-              } : null,
-            })
-          }
-        ]
-      })
-    });
-    const data = await out.json();
-    const content = data?.choices?.[0]?.message?.content?.trim();
-    return content || buildFallbackAnswer(text, route, context);
-  } catch (e) {
-    logger.warn({ err: e }, "AI answer generation failed, using fallback");
-    return buildFallbackAnswer(text, route, context);
-  }
-}
-
-const HAITHEM_PHONE_DIGITS = "21658746997";
-
-function findHaithemSession() {
-  let idMatch = null;
-  let nameMatch = null;
-  let firstConnected = null;
-  for (const [id, s] of sessions.entries()) {
-    if (s.status === "connected" && s.sock) {
-      if (id === "haithem_kalia" || id === "haithem" || id === "s_haithem") {
-        idMatch = s;
-      }
-      const pn = String(s.pushname ?? "").toLowerCase();
-      if (pn.includes("haithem") || pn.includes("kalia")) {
-        nameMatch = s;
-      }
-      if (!firstConnected) firstConnected = s;
-    }
-  }
-  return idMatch ?? nameMatch ?? firstConnected;
-}
-
-function findReplySession(fallbackEntry) {
-  const haithem = findHaithemSession();
-  if (haithem) return haithem;
-  return fallbackEntry;
-}
-
-function findCampaignSendSession(audienceBridgeSessionId) {
-  const haithem = findHaithemSession();
-  if (haithem) return haithem;
-  if (audienceBridgeSessionId) {
-    const byId = sessions.get(audienceBridgeSessionId);
-    if (byId && byId.status === "connected" && byId.sock) return byId;
-  }
-  for (const [id, s] of sessions.entries()) {
-    if (s.status === "connected" && s.sock) return s;
-  }
-  return null;
-}
-
-function formatPhoneVariants(raw) {
-  const d = normalizeDigits(raw);
-  if (!d) return [];
-  const variants = new Set();
-  variants.add("+" + d);
-  variants.add(d);
-  if (d.length === 11 && d.startsWith("1")) {
-    variants.add("+1 (" + d.slice(1, 4) + ") " + d.slice(4, 7) + "-" + d.slice(7));
-    variants.add("+1 " + d.slice(1, 4) + " " + d.slice(4, 7) + " " + d.slice(7));
-  }
-  if (d.startsWith("216") && d.length === 11) {
-    variants.add("+216 " + d.slice(3, 5) + " " + d.slice(5, 8) + " " + d.slice(8));
-    variants.add("+216" + d.slice(3));
-  }
-  if (d.length === 8) {
-    variants.add("+216 " + d.slice(0, 2) + " " + d.slice(2, 5) + " " + d.slice(5));
-    variants.add("+216" + d);
-    variants.add("216" + d);
-  }
-  if (d.startsWith("33") && d.length === 11) {
-    variants.add("+33 " + d.slice(3, 4) + " " + d.slice(4, 6) + " " + d.slice(6, 8) + " " + d.slice(8, 10) + " " + d.slice(10));
-  }
-  variants.add(d.replace(/^(\d{3})(\d{2})(\d{3})(\d{3})$/, "+$1 $2 $3 $4"));
-  return Array.from(variants);
-}
-
-async function processIncomingMessageForCampainsAndAI(entry, text, phone, originalRemoteJid) {
-  if (!SUPABASE_SERVICE_ROLE_KEY || !text || text.length < 2) return;
-
-  const phoneDigits = normalizeDigits(phone);
-  const orgId = await findAnyOrgId();
-
-  let guaranteedContactRow = null;
-  if (orgId && phoneDigits) {
-    try {
-      guaranteedContactRow = await ensureContactRow(orgId, {
-        name: `Contact ${phoneDigits.slice(-4)}`,
-        phone: formatPhone(phoneDigits),
-        tags: ["WhatsApp"],
-        consent: true,
-        stage: "prospect",
-        score: 0,
-      });
-    } catch (e) {
-      logger.warn({ err: e, phoneDigits }, "Could not ensure contact row");
-    }
-  }
-
-  let preferredCampaignContactId = guaranteedContactRow?.id ?? null;
-
-  try {
-    const campaigns = await supabaseRest("/campaigns?status=in.(running,done,paused,stopped)&select=id,audience,stop_on_reply,stats");
-
-    const allMatchingContactIds = new Set();
-    if (guaranteedContactRow?.id) {
-      allMatchingContactIds.add(guaranteedContactRow.id);
-    }
-    if (orgId && phoneDigits) {
-      const variants = formatPhoneVariants(phoneDigits);
-      if (variants.length > 0) {
-        const params = variants.map(v => `"${encodeURIComponent(v)}"`).join(",");
-        const contacts = await supabaseRest(`/contacts?org_id=eq.${orgId}&phone=in.(${params})&select=id,phone`);
-        if (Array.isArray(contacts)) {
-          for (const c of contacts) {
-            if (c?.id && normalizeDigits(c.phone) === phoneDigits) {
-              allMatchingContactIds.add(c.id);
-            }
-          }
-        }
-      }
-    }
-
-    const contactIdsArr = Array.from(allMatchingContactIds);
-    if (contactIdsArr.length > 0) {
-      preferredCampaignContactId = contactIdsArr[0];
-      if (orgId && (!guaranteedContactRow || String(guaranteedContactRow.id) !== String(preferredCampaignContactId))) {
-        try {
-          const canonicalFromCampaign = await ensureContactRow(orgId, {
-            id: preferredCampaignContactId,
-            name: `Contact ${phoneDigits.slice(-4)}`,
-            phone: formatPhone(phoneDigits),
-            tags: ["WhatsApp"],
-            consent: true,
-            stage: "prospect",
-            score: 0,
-          });
-          if (canonicalFromCampaign?.id) {
-            guaranteedContactRow = canonicalFromCampaign;
-            logger.info({ phone: phoneDigits, oldId: guaranteedContactRow?.id, forcedId: preferredCampaignContactId }, "Canonical contact id re-synced to campaign recipient");
-          }
-        } catch (e) {
-          logger.warn({ err: e, preferredCampaignContactId }, "Failed to re-sync to campaign contact id");
-        }
-      }
-      logger.info({ phone: phoneDigits, matchingContactIds: contactIdsArr.length, preferredId: preferredCampaignContactId }, "processIncomingMessageForCampainsAndAI: matching contact ids for campaign reply");
-    } else {
-      logger.warn({ phone: phoneDigits, orgId }, "processIncomingMessageForCampainsAndAI: no matching contact id found for campaign reply tracking");
-    }
-
-    if (contactIdsArr.length > 0 && Array.isArray(campaigns)) {
-      const contactIdsSet = new Set(contactIdsArr.map(x => String(x)));
-      for (const c of campaigns) {
-        const audience = (c.audience && typeof c.audience === "object") ? c.audience : {};
-        const recipientIdsRaw = Array.isArray(audience.recipientIds) ? audience.recipientIds : [];
-        const recipientIdsAsStrings = recipientIdsRaw.map(x => String(x));
-
-        let matchedId = contactIdsArr.find(id => recipientIdsAsStrings.includes(String(id)));
-        let matchReason = matchedId ? "by-id" : null;
-
-        if (!matchedId && orgId && phoneDigits) {
-          try {
-            if (recipientIdsAsStrings.length > 0 && recipientIdsAsStrings.length <= 5000) {
-              const batchParam = recipientIdsAsStrings.map(x => `"${encodeURIComponent(x)}"`).join(",");
-              const recipientRows = await supabaseRest(
-                `/contacts?id=in.(${batchParam})&select=id,phone&limit=${recipientIdsAsStrings.length}`
-              ).catch(() => []);
-              if (Array.isArray(recipientRows) && recipientRows.length > 0) {
-                const matchByPhone = recipientRows.find(r => normalizeDigits(r.phone) === phoneDigits);
-                if (matchByPhone?.id) {
-                  matchedId = matchByPhone.id;
-                  matchReason = "by-phone";
-                  if (!contactIdsSet.has(String(matchedId))) {
-                    contactIdsArr.push(String(matchedId));
-                    contactIdsSet.add(String(matchedId));
-                  }
-                }
-                logger.info({
-                  campaignId: c.id,
-                  recipientIds: recipientIdsAsStrings.slice(0, 50),
-                  recipientPhones: recipientRows.slice(0, 10).map(r => ({ id: r.id, phone: r.phone })),
-                  inputPhone: phoneDigits,
-                  foundIds: contactIdsArr,
-                  matchByPhone: !!matchedId && matchReason === "by-phone"
-                }, "[REPLY-TRACKING] Phone fallback audit");
-              }
-            }
-          } catch (e) {
-            logger.warn({ err: e, campaignId: c.id }, "[REPLY-TRACKING] phone fallback failed");
-          }
-        }
-
-        if (!matchedId) {
-          logger.warn({
-            campaignId: c.id,
-            contactIds: contactIdsArr,
-            recipientIdsFirst10: recipientIdsAsStrings.slice(0, 10),
-            recipientIdsTotal: recipientIdsAsStrings.length,
-            phone: phoneDigits,
-          }, "[REPLY-TRACKING] NO MATCH — skipping campaign reply increment");
-          continue;
-        }
-
-        const stats = c.stats || {};
-        const existingReplies = Number(stats.replies || 0);
-        const repliedContactIdsAsStrings = Array.isArray(stats.replied_contact_ids) ? stats.replied_contact_ids.map(x => String(x)) : [];
-        const alreadyReplied = repliedContactIdsAsStrings.includes(String(matchedId));
-        const newRepliedIds = alreadyReplied ? repliedContactIdsAsStrings : [...repliedContactIdsAsStrings, String(matchedId)];
-
-        const newStats = { ...stats, replies: alreadyReplied ? existingReplies : (existingReplies + 1), replied_contact_ids: newRepliedIds };
-        const patchBody = { stats: newStats };
-        if (c.stop_on_reply) {
-          logger.info({ campaignId: c.id, phone: phoneDigits, matchedId, matchReason }, "Stopping campaign for contact due to reply");
-          const newRecipientIds = recipientIdsRaw.filter(id => !contactIdsSet.has(String(id)));
-          patchBody.audience = { ...audience, recipientIds: newRecipientIds };
-        } else {
-          logger.info({ campaignId: c.id, phone: phoneDigits, matchedId, matchReason, before: existingReplies, after: newStats.replies, alreadyReplied }, "Tracking reply for campaign");
-        }
-        await supabaseRest(`/campaigns?id=eq.${c.id}`, {
-          method: "PATCH",
-          body: JSON.stringify(patchBody)
-        }).then(resp => {
-          logger.info({ campaignId: c.id, newReplies: newStats.replies, respType: Array.isArray(resp) ? "array:" + resp.length : typeof resp }, "[REPLY-TRACKING] PATCH response");
-          return resp;
-        }).catch(err => logger.warn({ err, campaignId: c.id }, "failed to patch campaign reply stats"));
-      }
-    }
-  } catch (e) {
-    logger.warn({ err: e, phone: phoneDigits }, "processIncomingMessageForCampainsAndAI reply tracking failed");
-  }
-
-  setTimeout(async () => {
-    try {
-      const replyEntry = findReplySession(entry);
-      const replySessionId = replyEntry === entry ? "same" : (replyEntry?.phone ?? "haithem");
-      const aiContext = await buildCustomerAiContext(orgId, guaranteedContactRow);
-      const route = await routeAgentForText(text, aiContext);
-      const toolsContext = await buildRouterToolsContext(orgId, guaranteedContactRow, text, route, aiContext);
-      const effectiveRoute = {
-        ...route,
-        human_required: Boolean(route?.human_required)
-          || (Number(route?.confidence ?? 0) * 100) < Number(toolsContext?.activeAgent?.threshold ?? 85),
-      };
-      const fullContext = {
-        ...aiContext,
-        tools: toolsContext,
-      };
-      const answer = await craftAnswer(text, effectiveRoute, fullContext);
-      const resolvedJid = resolveSendJid(phone, originalRemoteJid);
-      logger.info({
-        phone,
-        route: effectiveRoute,
-        toolsContext,
-        text,
-        replySessionId,
-        contactId: guaranteedContactRow?.id,
-        originalRemoteJid: originalRemoteJid || null,
-        resolvedJid
-      }, "Message routed to central router — preparing send");
-
-      if (!replyEntry?.sock) {
-        logger.error({ phone }, "Aucune session disponible pour envoi réponse IA");
-        return;
-      }
-      if (!resolvedJid) {
-        logger.error({ phone, originalRemoteJid }, "Aucun JID résolu pour envoi réponse IA");
-        return;
-      }
-      const aiSendTs = Date.now();
-      const agentMode = toolsContext?.activeAgent?.mode ?? "suggestion";
-      const isAutonome = agentMode === "autonome";
-      const transferReply = buildTransferReply(effectiveRoute.reply_language || "fr");
-      const rawAnswer = answer;
-      const finalAnswer = (effectiveRoute.human_required && !isAutonome) ? transferReply : answer;
-      const sendAttempt = await replyEntry.sock.sendMessage(resolvedJid, { text: finalAnswer }).catch(sendErr => {
-        logger.error({ sendErr, resolvedJid, fallback: toJid(phone) }, "Échec sendMessage sur JID résolu");
-        return null;
-      });
-      let fallbackSent = false;
-      if (!sendAttempt && isValidRemoteJid(toJid(phone)) && toJid(phone) !== resolvedJid) {
-        logger.warn({ phone, resolvedJid, fallback: toJid(phone) }, "Retry sendMessage with fallback toJid");
-        const fbResult = await replyEntry.sock.sendMessage(toJid(phone), { text: finalAnswer }).catch(fbErr => {
-          logger.error({ fbErr, fallback: toJid(phone) }, "Même le fallback @s.whatsapp.net a échoué");
-          return null;
-        });
-        fallbackSent = !!fbResult;
-      }
-      const aiMsgId = (sendAttempt || fallbackSent) ? ((sendAttempt ?? fallbackSent)?.key?.id ?? `ai_reply_${aiSendTs}_${Math.random().toString(36).slice(2, 8)}`) : `ai_reply_${aiSendTs}_${Math.random().toString(36).slice(2, 8)}`;
-      const aiPeerPhone = jidToPhone(resolvedJid) ?? phoneDigits;
-      const replyBridgeSessionIdForEvent = Object.keys(Object.fromEntries(sessions.entries())).find(k => sessions.get(k) === replyEntry) ?? "haithem_reply";
-      if (sendAttempt || fallbackSent) {
-        pushEvent(replyBridgeSessionIdForEvent, {
-          id: aiMsgId,
-          type: "message",
-          direction: "out",
-          sessionId: replyBridgeSessionIdForEvent,
-          from: replyEntry.phone ?? "",
-          to: aiPeerPhone,
-          body: finalAnswer,
-          pushName: undefined,
-          at: aiSendTs,
-        });
-      }
-      await persistAiSuggestionForRoute(orgId, effectiveRoute, fullContext, toolsContext, rawAnswer, text);
-      logger.info(
-        { phone, route: effectiveRoute, replySessionId, resolvedJid, agentMode, overridden: finalAnswer !== rawAnswer, isAutonome },
-        "Specialized AI agent sent answer via HAITHEM session"
-      );
-
-      if (orgId && phoneDigits) {
-        const replyBridgeSessionId = Object.keys(Object.fromEntries(sessions.entries())).find(k => sessions.get(k) === replyEntry) ?? "haithem_reply";
-        persistRuntimeMessageDirect(orgId, {
-          sessionId: replyBridgeSessionId,
-          sessionName: replyEntry.pushname ?? replyEntry.phone ?? "Session IA",
-          sessionPhone: replyEntry.phone,
-          sessionStatus: replyEntry.status ?? "connected",
-          contact: {
-            id: guaranteedContactRow?.id ?? preferredCampaignContactId ?? undefined,
-            name: guaranteedContactRow?.name ?? `Contact ${phoneDigits.slice(-4)}`,
-            phone: formatPhone(phoneDigits),
-            tags: ["WhatsApp"],
-            consent: true,
-            stage: "prospect",
-            score: 0,
-          },
-          message: {
-            direction: "out",
-            body: finalAnswer,
-            at: aiSendTs,
-            status: "sent",
-          },
-        }).catch((persistErr) => {
-          logger.warn({ persistErr, phoneDigits }, "Failed to persist AI answer to DB");
-        });
-      }
-    } catch (e) {
-      logger.error({ err: e }, "AI orchestration failed");
-    }
-  }, 1000);
-}
+  // Évite un curseur bloqué « à l'inf
