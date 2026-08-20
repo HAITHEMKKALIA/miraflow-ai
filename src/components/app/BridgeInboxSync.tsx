@@ -74,23 +74,20 @@ function addActivity(list: ActivityEvent[], text: string): ActivityEvent[] {
   return [{ id: localId("ac"), at: Date.now(), kind: "message" as const, text }, ...list].slice(0, 40);
 }
 
-function findPreferredSessionId(sessions: { id: string; phone?: string; status?: string; type?: string }[]): string | null {
+function findPreferredSessionId(sessions: { id: string; name?: string; phone?: string; status?: string; type?: string }[]): string | null {
   let connectedPrincipal: string | null = null;
-  let connectedNamed: string | null = null;
   let connectedAny: string | null = null;
   let fallback: string | null = null;
   for (const s of sessions) {
-    const sn = String(s.name ?? "").toLowerCase();
     const digits = normalizeDigits(s.phone);
     if (s.status === "connected") {
       if (s.type === "principal") connectedPrincipal = s.id;
-      if (sn.includes("haithem") || sn.includes("kalia")) connectedNamed = s.id;
       if (!connectedAny && digits) connectedAny = s.id;
       if (!connectedAny) connectedAny = s.id;
     }
     if (!fallback) fallback = s.id;
   }
-  return connectedNamed ?? connectedPrincipal ?? connectedAny ?? fallback;
+  return connectedPrincipal ?? connectedAny ?? fallback;
 }
 
 function mergeThreads(current: Message[], incoming: Message[]): Message[] {
@@ -283,7 +280,6 @@ function ingestIncomingEvent(event: BridgeMessageEvent) {
 
 export default function BridgeInboxSync() {
   const sessions = useSessions();
-  const demoMode = useSim((s) => s.demoMode);
   const cursorsRef = useRef<Record<string, number>>(readCursors());
   const runningRef = useRef(false);
 
@@ -293,7 +289,7 @@ export default function BridgeInboxSync() {
   );
 
   useEffect(() => {
-    if (demoMode || !connectedKey) return undefined;
+    if (!connectedKey) return undefined;
 
     let stopped = false;
     const tick = async () => {
@@ -346,7 +342,7 @@ export default function BridgeInboxSync() {
       stopped = true;
       clearInterval(timer);
     };
-  }, [connectedKey, demoMode]);
+  }, [connectedKey]);
 
   return null;
 }
